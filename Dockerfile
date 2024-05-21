@@ -36,6 +36,9 @@ RUN apt-get update -q \
 
 RUN git lfs install
 
+# for rendering
+RUN apt-get update && apt-get install -y xvfb
+
 ENV LANG C.UTF-8
 
 # Set the PATH to the venv before we create the venv, so it's visible in base.
@@ -63,11 +66,11 @@ COPY ./README.md ./README.md
 COPY ./src/imitation/__init__.py ./src/imitation/__init__.py
 COPY ci/build_and_activate_venv.sh ./ci/build_and_activate_venv.sh
 
-# Pass mock value for version because .git is not present in the Docker container
-# at this stage, so setuptools-scm cannot determine version automatically.
-# setuptools-scm will compute it correctly when it comes to building and installing
-# imitation, as .git will then be present.
-RUN SETUPTOOLS_SCM_PRETEND_VERSION="dummy" ci/build_and_activate_venv.sh /venv \
+# Copy the .git directory into the Docker image
+COPY .git .git
+
+# Now setuptools-scm can determine the version of the imitation package correctly
+RUN ci/build_and_activate_venv.sh /venv \
     && rm -rf $HOME/.cache/pip
 
 # full stage contains everything.
@@ -76,9 +79,20 @@ FROM python-req as full
 
 # Delay copying (and installing) the code until the very end
 COPY . /imitation
+# install whole directory
+RUN pip install -e .
 # Build a wheel then install to avoid copying whole directory (pip issue #2195)
-RUN python3 setup.py sdist bdist_wheel
-RUN pip install --upgrade dist/imitation-*.whl
+# RUN python3 setup.py sdist bdist_wheel
+# RUN pip install --upgrade dist/imitation-*.whl
+
+# for using reacher
+RUN pip install gymnasium[mujoco]
+
 
 # Default entrypoints
 CMD ["pytest", "-n", "auto", "-vv", "tests/"]
+
+# HOW TO RUN JUPYTER NOTEBOOK FOR RENDERING VIDEO
+# IN THE DOCKER CONTAINER SHELL:
+# $ cd docs/tutorials
+# $ xvfb-run -s "-screen 0 1400x900x24" jupyter notebook --ip 0.0.0.0 --no-browser --allow-root --NotebookApp.token=''
