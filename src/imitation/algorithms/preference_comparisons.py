@@ -3,6 +3,7 @@
 Trains a reward model and optionally a policy based on preferences
 between trajectory fragments.
 """
+import os
 import abc
 import math
 import pickle
@@ -28,6 +29,7 @@ import numpy as np
 import torch as th
 from scipy import special
 from stable_baselines3.common import base_class, type_aliases, utils, vec_env
+from stable_baselines3.common.vec_env.vec_video_recorder import VecVideoRecorder
 from torch import nn
 from torch.utils import data as data_th
 from tqdm.auto import tqdm
@@ -204,6 +206,7 @@ class AgentTrainer(TrajectoryGenerator):
             rng=self.rng,
         )
 
+
     def train(self, steps: int, **kwargs) -> None:
         """Train the agent using the reward function specified during instantiation.
 
@@ -340,6 +343,96 @@ def _get_trajectories(
     # sanity check
     assert sum(len(traj) for traj in trajectories) >= steps
     return trajectories
+
+
+class AgentTrainerWithVideoBuffering(AgentTrainer):
+    def __init__(
+        self,
+        algorithm: base_class.BaseAlgorithm,
+        reward_fn: Union[reward_function.RewardFn, reward_nets.RewardNet],
+        venv: vec_env.VecEnv,
+        rng: np.random.Generator,
+        exploration_frac: float = 0.0,
+        switch_prob: float = 0.5,
+        random_prob: float = 0.5,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        video_folder: str = 'videos',
+        video_length: int = 200,
+        record_video_trigger: Optional[Callable[[int], bool]] = None,
+        name_prefix: str = 'rl-video',
+    ) -> None:
+        """Initialize the agent trainer with video buffering.
+
+        Args:
+            algorithm: the stable-baselines algorithm to use for training.
+            reward_fn: either a RewardFn or a RewardNet instance that will supply
+                the rewards used for training the agent.
+            venv: vectorized environment to train in.
+            rng: random number generator used for exploration and for sampling.
+            exploration_frac: fraction of the trajectories that will be generated
+                partially randomly rather than only by the agent when sampling.
+            switch_prob: the probability of switching the current policy at each
+                step for the exploratory samples.
+            random_prob: the probability of picking the random policy when switching
+                during exploration.
+            custom_logger: Where to log to; if None (default), creates a new logger.
+            video_folder: Folder where videos will be saved.
+            video_length: Length of each video in steps.
+            record_video_trigger: Function to determine when to start recording.
+            name_prefix: Prefix for video file names.
+        """
+        if record_video_trigger is None:
+            record_video_trigger = lambda step: step % video_length == 0
+        
+        self.video_folder = video_folder
+        self.video_length = video_length
+        self.name_prefix = name_prefix
+        
+        # Wrapping the environment with VecVideoRecorder
+        venv = VecVideoRecorder(
+            venv,
+            video_folder=video_folder,
+            record_video_trigger=record_video_trigger,
+            video_length=video_length,
+            name_prefix=name_prefix
+        )
+
+        super().__init__(
+            algorithm=algorithm,
+            reward_fn=reward_fn,
+            venv=venv,
+            rng=rng,
+            exploration_frac=exploration_frac,
+            switch_prob=switch_prob,
+            random_prob=random_prob,
+            custom_logger=custom_logger
+        )
+
+    def sample(self, steps: int) -> Sequence[TrajectoryWithRew]:
+        trajectories_with_videos = []
+        for traj in super().sample(steps):
+            video_file = self._find_video_file(traj)
+            traj_with_video = TrajectoryWithRew(
+                obs=traj.obs,
+                acts=traj.acts,
+                rews=traj.rews,
+                infos=traj.infos,
+                terminal=traj.terminal,
+                video_path=video_file
+            )
+            trajectories_with_videos.append(traj_with_video)
+        return trajectories_with_videos
+
+    def _find_video_file(self, traj: TrajectoryWithRew) -> Optional[str]:
+        """Find the video file corresponding to a given trajectory."""
+        step_id = traj.infos[0].get('step_id', None)
+        if step_id is not None:
+            video_name = f'{self.name_prefix}-step-{step_id}-to-step-{step_id + self.video_length}.mp4'
+            video_path = os.path.join(self.video_folder, video_name)
+            if os.path.exists(video_path):
+                return video_path
+        return None
+
 
 
 class PreferenceModel(nn.Module):

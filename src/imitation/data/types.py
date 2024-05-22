@@ -433,6 +433,9 @@ class TrajectoryWithRew(Trajectory):
     rews: np.ndarray
     """Reward, shape (trajectory_len, ). dtype float."""
 
+    video_path: Optional[str] = None
+    """Path to video file of the trajectory, if available. Optional."""
+
     def __post_init__(self):
         """Performs input validation, including for rews."""
         super().__post_init__()
