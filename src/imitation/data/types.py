@@ -433,9 +433,6 @@ class TrajectoryWithRew(Trajectory):
     rews: np.ndarray
     """Reward, shape (trajectory_len, ). dtype float."""
 
-    video_path: Optional[str] = None
-    """Path to video file of the trajectory, if available. Optional."""
-
     def __post_init__(self):
         """Performs input validation, including for rews."""
         super().__post_init__()
@@ -445,6 +442,21 @@ class TrajectoryWithRew(Trajectory):
 Pair = Tuple[T, T]
 TrajectoryPair = Pair[Trajectory]
 TrajectoryWithRewPair = Pair[TrajectoryWithRew]
+
+
+def find_video_file(infos: List[Dict]) -> Optional[str]:
+        """Find the video file corresponding to a given step_id."""
+        video_path = None
+        for i, info in enumerate(infos):
+            video_path = info.get('video_path')
+            if video_path:
+                print(f"Video path found in step {i}: {video_path}")
+                break
+        if video_path and os.path.exists(video_path):
+            #print(f"Video file {video_path} found.")
+            return video_path
+        print(f"Video file not found for step_id.")
+        return None
 
 
 def transitions_collate_fn(

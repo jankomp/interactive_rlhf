@@ -88,6 +88,9 @@ RUN pip install -e .
 # for using reacher
 RUN pip install gymnasium[mujoco]
 
+# for presenting the videos when gathering preferences from humans
+RUN pip install opencv-python pygame moviepy
+
 
 # Default entrypoints
 CMD ["pytest", "-n", "auto", "-vv", "tests/"]

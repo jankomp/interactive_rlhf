@@ -4,6 +4,8 @@ Trains a reward model and optionally a policy based on preferences
 between trajectory fragments.
 """
 import os
+import pygame
+import cv2
 import abc
 import math
 import pickle
@@ -29,7 +31,6 @@ import numpy as np
 import torch as th
 from scipy import special
 from stable_baselines3.common import base_class, type_aliases, utils, vec_env
-from stable_baselines3.common.vec_env.vec_video_recorder import VecVideoRecorder
 from torch import nn
 from torch.utils import data as data_th
 from tqdm.auto import tqdm
@@ -42,12 +43,14 @@ from imitation.data.types import (
     TrajectoryWithRew,
     TrajectoryWithRewPair,
     Transitions,
+    find_video_file,
 )
 from imitation.policies import exploration_wrapper
 from imitation.regularization import regularizers
 from imitation.rewards import reward_function, reward_nets, reward_wrapper
 from imitation.util import logger as imit_logger
 from imitation.util import networks, util
+from imitation.util import vec_video_recorder
 
 
 class TrajectoryGenerator(abc.ABC):
@@ -388,8 +391,11 @@ class AgentTrainerWithVideoBuffering(AgentTrainer):
         self.video_length = video_length
         self.name_prefix = name_prefix
         
+        # Create video folder if it doesn't exist
+        if not os.path.exists(video_folder):
+            os.makedirs(video_folder)
         # Wrapping the environment with VecVideoRecorder
-        venv = VecVideoRecorder(
+        venv = vec_video_recorder.VecVideoRecorder(
             venv,
             video_folder=video_folder,
             record_video_trigger=record_video_trigger,
@@ -407,32 +413,6 @@ class AgentTrainerWithVideoBuffering(AgentTrainer):
             random_prob=random_prob,
             custom_logger=custom_logger
         )
-
-    def sample(self, steps: int) -> Sequence[TrajectoryWithRew]:
-        trajectories_with_videos = []
-        for traj in super().sample(steps):
-            video_file = self._find_video_file(traj)
-            traj_with_video = TrajectoryWithRew(
-                obs=traj.obs,
-                acts=traj.acts,
-                rews=traj.rews,
-                infos=traj.infos,
-                terminal=traj.terminal,
-                video_path=video_file
-            )
-            trajectories_with_videos.append(traj_with_video)
-        return trajectories_with_videos
-
-    def _find_video_file(self, traj: TrajectoryWithRew) -> Optional[str]:
-        """Find the video file corresponding to a given trajectory."""
-        step_id = traj.infos[0].get('step_id', None)
-        if step_id is not None:
-            video_name = f'{self.name_prefix}-step-{step_id}-to-step-{step_id + self.video_length}.mp4'
-            video_path = os.path.join(self.video_folder, video_name)
-            if os.path.exists(video_path):
-                return video_path
-        return None
-
 
 
 class PreferenceModel(nn.Module):
@@ -997,6 +977,85 @@ class SyntheticGatherer(PreferenceGatherer):
             ],
         )
         return np.array(rews1, dtype=np.float32), np.array(rews2, dtype=np.float32)
+    
+
+class HumanGatherer(PreferenceGatherer):
+    """Collects human feedback by displaying videos and capturing keyboard inputs."""
+
+    def __init__(
+        self,
+        rng: Optional[np.random.Generator] = None,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+    ) -> None:
+        super().__init__(rng=rng, custom_logger=custom_logger)
+        self.window_name = "Trajectory Comparison"
+
+    def display_videos(self, video_path1: str, video_path2: str) -> None:
+        """Display two videos side by side."""
+        cap1 = cv2.VideoCapture(video_path1)
+        cap2 = cv2.VideoCapture(video_path2)
+
+        while cap1.isOpened() and cap2.isOpened():
+            ret1, frame1 = cap1.read()
+            ret2, frame2 = cap2.read()
+
+            if not ret1 or not ret2:
+                break
+
+            combined_frame = cv2.hconcat([frame1, frame2])
+            cv2.imshow(self.window_name, combined_frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap1.release()
+        cap2.release()
+        cv2.destroyAllWindows()
+
+    def get_human_feedback(self) -> float:
+        """Get human feedback using arrow keys."""
+        pygame.init()
+        screen = pygame.display.set_mode((100, 100))
+        pygame.display.set_caption("Press arrow keys to give feedback")
+
+        feedback = 0.5  # Default to indifference
+
+        waiting_for_input = True
+        while waiting_for_input:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    waiting_for_input = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_UP:
+                        feedback = 0.5
+                        waiting_for_input = False
+                    elif event.key == pygame.K_LEFT:
+                        feedback = 1.0
+                        waiting_for_input = False
+                    elif event.key == pygame.K_RIGHT:
+                        feedback = 0.0
+                        waiting_for_input = False
+                    elif event.key == pygame.K_DOWN:
+                        feedback = 0.5
+                        waiting_for_input = False
+
+        pygame.quit()
+        return feedback
+
+    def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
+        """Gather human preferences for the given fragment pairs."""
+        preferences = []
+        for idx, (frag1, frag2) in enumerate(fragment_pairs):
+            video_path1 = types.find_video_file(frag1.infos)
+            video_path2 = types.find_video_file(frag2.infos)
+            if video_path1 is None or video_path2 is None:
+                raise ValueError(f"Both fragments in pair {idx} must have a video_path for human feedback. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+
+            self.display_videos(video_path1, video_path2)
+            feedback = self.get_human_feedback()
+            preferences.append(feedback)
+
+        return np.array(preferences, dtype=np.float32)
 
 
 class PreferenceDataset(data_th.Dataset):

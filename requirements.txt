@@ -1,0 +1,5 @@
+-e .
+gymnasium[mujoco]
+opencv-python
+pygame
+moviepy
