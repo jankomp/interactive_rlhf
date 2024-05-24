@@ -52,6 +52,10 @@ from imitation.util import logger as imit_logger
 from imitation.util import networks, util
 from imitation.util import vec_video_recorder
 
+from IPython.display import HTML, display, clear_output
+import ipywidgets as widgets
+from functools import wraps
+
 
 class TrajectoryGenerator(abc.ABC):
     """Generator of trajectories with optional training logic."""
@@ -1012,6 +1016,17 @@ class HumanGatherer(PreferenceGatherer):
         cap2.release()
         cv2.destroyAllWindows()
 
+    def display_videos2(self, video_path1: str, video_path2: str) -> None:
+        display(
+        HTML(f"""
+        <video alt="test" controls autoplay loop>
+        <source src={video_path1} type="video/mp4">
+        </video>
+        <video alt="test" controls autoplay loop>
+        <source src={video_path2} type="video/mp4">
+        </video>
+        """))
+
     def get_human_feedback(self) -> float:
         """Get human feedback using arrow keys."""
         pygame.init()
@@ -1041,6 +1056,17 @@ class HumanGatherer(PreferenceGatherer):
 
         pygame.quit()
         return feedback
+    
+    def get_human_feedback2(self) -> float:
+        while True:
+            x = input()
+            if x == 'a':
+                return 0.0
+            elif x == 'd':
+                return 1.0
+            else:
+                print("Invalid input. Please press 'a' for left video and 'd' for right video.")
+                continue
 
     def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
         """Gather human preferences for the given fragment pairs."""
@@ -1051,8 +1077,9 @@ class HumanGatherer(PreferenceGatherer):
             if video_path1 is None or video_path2 is None:
                 raise ValueError(f"Both fragments in pair {idx} must have a video_path for human feedback. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
 
-            self.display_videos(video_path1, video_path2)
-            feedback = self.get_human_feedback()
+            self.display_videos2(video_path1, video_path2)
+            feedback = self.get_human_feedback2()
+            clear_output(wait=True)
             preferences.append(feedback)
 
         return np.array(preferences, dtype=np.float32)
