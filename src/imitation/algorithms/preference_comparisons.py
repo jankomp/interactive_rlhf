@@ -853,6 +853,76 @@ class ActiveSelectionFragmenter(Fragmenter):
             else:
                 self.raise_uncertainty_on_not_supported()
         return var_estimate
+    
+class KingOfTheHillFragmenter(Fragmenter):
+    def __init__(
+        self,
+        rng: np.random.Generator,
+        iterations: int,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+    ) -> None:
+        super().__init__(custom_logger)
+        self.rng = rng
+        self.iterations = iterations
+
+    def __call__(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        fragment_length: int,
+        num_pairs: int,
+    ) -> Sequence[TrajectoryWithRewPair]:
+        pairs: List[TrajectoryWithRewPair] = []
+
+        # filter out all trajectories that are too short
+        trajectories = [traj for traj in trajectories if len(traj) >= fragment_length]
+        if len(trajectories) == 0:
+            raise ValueError(
+                "No trajectories are long enough for the desired fragment length "
+                f"of {fragment_length}.",
+            )
+
+        weights = [len(traj) for traj in trajectories]
+
+        # we need two fragments for each comparison
+        while len(pairs) < num_pairs:
+            # Start with a random pair
+            traj1, traj2 = self.rng.choice(trajectories, 2, replace=False, p=np.array(weights) / sum(weights))
+            pairs.append((traj1, traj2))
+
+            for _ in range(self.iterations):
+                # Keep the trajectory with the higher reward
+                if sum(traj1.rews) > sum(traj2.rews):
+                    keep_traj = traj1
+                else:
+                    keep_traj = traj2
+
+                # Randomly sample another trajectory for the next pair
+                traj2 = self.rng.choice(trajectories, replace=False, p=np.array(weights) / sum(weights))
+
+                # Create a fragment from the kept trajectory and the new trajectory
+                start1 = self.rng.integers(0, len(keep_traj) - fragment_length, endpoint=True)
+                start2 = self.rng.integers(0, len(traj2) - fragment_length, endpoint=True)
+                end1 = start1 + fragment_length
+                end2 = start2 + fragment_length
+                terminal1 = (end1 == len(keep_traj)) and keep_traj.terminal
+                terminal2 = (end2 == len(traj2)) and traj2.terminal
+                fragment1 = TrajectoryWithRew(
+                    obs=keep_traj.obs[start1 : end1 + 1],
+                    acts=keep_traj.acts[start1:end1],
+                    infos=keep_traj.infos[start1:end1] if keep_traj.infos is not None else None,
+                    rews=keep_traj.rews[start1:end1],
+                    terminal=terminal1,
+                )
+                fragment2 = TrajectoryWithRew(
+                    obs=traj2.obs[start2 : end2 + 1],
+                    acts=traj2.acts[start2:end2],
+                    infos=traj2.infos[start2:end2] if traj2.infos is not None else None,
+                    rews=traj2.rews[start2:end2],
+                    terminal=terminal2,
+                )
+                pairs.append((fragment1, fragment2))
+
+        return pairs
 
 
 class PreferenceGatherer(abc.ABC):
@@ -1064,22 +1134,30 @@ class HumanGatherer(PreferenceGatherer):
                 return 0.0
             elif x == 'd':
                 return 1.0
+            elif x == 'w':
+                return 0.5
+            elif x == 's':
+                return None
             else:
-                print("Invalid input. Please press 'a' for left video and 'd' for right video.")
+                print("Invalid input. Please press 'a' for left video, 'd' for right video, 'w' for tie, 's' to skip.")
                 continue
 
     def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
         """Gather human preferences for the given fragment pairs."""
         preferences = []
         for idx, (frag1, frag2) in enumerate(fragment_pairs):
-            video_path1 = types.find_video_file(frag1.infos)
-            video_path2 = types.find_video_file(frag2.infos)
+            video_path1 = find_video_file(frag1.infos)
+            video_path2 = find_video_file(frag2.infos)
             if video_path1 is None or video_path2 is None:
-                raise ValueError(f"Both fragments in pair {idx} must have a video_path for human feedback. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                continue
 
             self.display_videos2(video_path1, video_path2)
             feedback = self.get_human_feedback2()
             clear_output(wait=True)
+            if feedback is None:
+                self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                continue
             preferences.append(feedback)
 
         return np.array(preferences, dtype=np.float32)
@@ -1872,12 +1950,15 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # Gather new preferences #
             ##########################
             num_steps = math.ceil(
-                self.transition_oversampling * 2 * num_pairs * self.fragment_length,
+                self.transition_oversampling * 2 * (num_pairs + 1) * self.fragment_length,
             )
             self.logger.log(
                 f"Collecting {2 * num_pairs} fragments ({num_steps} transitions)",
             )
             trajectories = self.trajectory_generator.sample(num_steps)
+            # pop the last trajectory (since the video could not be saved correctly)
+            trajectories.pop()
+
             # This assumes there are no fragments missing initial timesteps
             # (but allows for fragments missing terminal timesteps).
             horizons = (len(traj) for traj in trajectories if traj.terminal)
