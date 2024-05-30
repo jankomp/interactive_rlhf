@@ -55,7 +55,11 @@ from imitation.util import vec_video_recorder
 from IPython.display import HTML, display, clear_output
 import ipywidgets as widgets
 from functools import wraps
-
+from flask import Flask, Response, request, jsonify, send_file
+import time
+import json
+from flask_cors import CORS
+from threading import Thread
 
 class TrajectoryGenerator(abc.ABC):
     """Generator of trajectories with optional training logic."""
@@ -1086,17 +1090,6 @@ class HumanGatherer(PreferenceGatherer):
         cap2.release()
         cv2.destroyAllWindows()
 
-    def display_videos2(self, video_path1: str, video_path2: str) -> None:
-        display(
-        HTML(f"""
-        <video alt="test" controls autoplay loop>
-        <source src={video_path1} type="video/mp4">
-        </video>
-        <video alt="test" controls autoplay loop>
-        <source src={video_path2} type="video/mp4">
-        </video>
-        """))
-
     def get_human_feedback(self) -> float:
         """Get human feedback using arrow keys."""
         pygame.init()
@@ -1126,8 +1119,62 @@ class HumanGatherer(PreferenceGatherer):
 
         pygame.quit()
         return feedback
+
+    def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
+        """Gather human preferences for the given fragment pairs."""
+        preferences = []
+        for idx, (frag1, frag2) in enumerate(fragment_pairs):
+            video_path1 = find_video_file(frag1.infos)
+            video_path2 = find_video_file(frag2.infos)
+            if video_path1 is None or video_path2 is None:
+                self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                continue
+
+            self.display_videos(video_path1, video_path2)
+            feedback = self.get_human_feedback()
+            clear_output(wait=True)
+            if feedback is None:
+                self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                continue
+            preferences.append(feedback)
+
+        return np.array(preferences, dtype=np.float32)
+
+class HumanGathererJupyter(PreferenceGatherer):
+    """Collects human feedback by displaying videos and capturing keyboard inputs."""
+
+    def __init__(
+        self,
+        rng: Optional[np.random.Generator] = None,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+    ) -> None:
+        super().__init__(rng=rng, custom_logger=custom_logger)
+        self.window_name = "Trajectory Comparison"
+
+    def display_videos(self, video_path1: str, video_path2: str) -> None:
+        display(
+        HTML(f"""
+        <video id="video1" alt="test" controls autoplay>
+        <source src="{video_path1}" type="video/mp4">
+        </video>
+        <video id="video2" alt="test" controls autoplay>
+        <source src="{video_path2}" type="video/mp4">
+        </video>
+        <script>
+        var video1 = document.getElementById('video1');
+        var video2 = document.getElementById('video2');
+        video1.playbackRate = 0.5;
+        video2.playbackRate = 0.5;
+        video1.onended = function() {{
+            setTimeout(function() {{ video1.play(); }}, 1000);
+        }};
+        video2.onended = function() {{
+            setTimeout(function() {{ video2.play(); }}, 1000);
+        }};
+        </script>
+        """))
     
-    def get_human_feedback2(self) -> float:
+    def get_human_feedback(self) -> float:
         while True:
             x = input()
             if x == 'a':
@@ -1152,8 +1199,83 @@ class HumanGatherer(PreferenceGatherer):
                 self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
                 continue
 
-            self.display_videos2(video_path1, video_path2)
-            feedback = self.get_human_feedback2()
+            self.display_videos(video_path1, video_path2)
+            feedback = self.get_human_feedback()
+            clear_output(wait=True)
+            if feedback is None:
+                self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                continue
+            preferences.append(feedback)
+
+        return np.array(preferences, dtype=np.float32)
+
+from queue import Queue
+
+class HumanGathererAPI(PreferenceGatherer):
+    """Collects human feedback by displaying videos and capturing keyboard inputs."""
+
+    def __init__(
+        self,
+        rng: Optional[np.random.Generator] = None,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+    ) -> None:
+        super().__init__(rng=rng, custom_logger=custom_logger)
+        self.window_name = "Trajectory Comparison"
+        self.app = Flask(__name__)
+        CORS(self.app)
+        self.videos = ['','']
+        self.queue = Queue()
+        self.app.route('/key_press', methods=['POST'])(self.key_press)
+        self.app.route('/stream')(self.stream)
+        self.app.route('/videos/<path:filename>')(self.serve_video)
+        print('Starting server in a new thread')
+        Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
+
+    def send_videos(self):
+        yield 'data: {}\n\n'.format(json.dumps(self.videos))
+
+    def key_press(self):
+        key = request.json.get('key')
+        self.queue.put(key)
+        return jsonify({'message': 'Success'})
+    
+    def stream(self):
+        return Response(self.send_videos(), mimetype='text/event-stream')
+
+    def serve_video(self, filename):
+        if not os.path.isabs(filename):
+            filename = os.path.join('/', filename)
+        return send_file(filename)
+
+    def display_videos(self, video_path1: str, video_path2: str) -> None:
+        self.videos = [video_path1, video_path2]
+        self.send_videos()        
+
+    def get_human_feedback(self) -> float:
+        key = self.queue.get()  # This will block until a key is available
+        if key == 'ArrowLeft':
+            return 0.0
+        elif key == 'ArrowRight':
+            return 1.0
+        elif key == 'ArrowUp':
+            return 0.5
+        elif key == 'ArrowDown':
+            return None
+        else:
+            print("Invalid input. Please press 'a' for left video, 'd' for right video, 'w' for tie, 's' to skip.")
+
+    def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
+        """Gather human preferences for the given fragment pairs."""
+        preferences = []
+        for idx, (frag1, frag2) in enumerate(fragment_pairs):
+            video_path1 = find_video_file(frag1.infos)
+            video_path2 = find_video_file(frag2.infos)
+            if video_path1 is None or video_path2 is None:
+                self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                continue
+
+            self.display_videos(video_path1, video_path2)
+            feedback = self.get_human_feedback()
             clear_output(wait=True)
             if feedback is None:
                 self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")

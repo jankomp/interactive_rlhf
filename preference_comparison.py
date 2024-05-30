@@ -21,7 +21,7 @@ fragmenter = preference_comparisons.RandomFragmenter(
     rng=rng,
 )
 #gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGatherer(rng=rng)
+gatherer = preference_comparisons.HumanGathererAPI(rng=rng)
 preference_model = preference_comparisons.PreferenceModel(reward_net)
 reward_trainer = preference_comparisons.BasicRewardTrainer(
     preference_model=preference_model,
@@ -60,7 +60,7 @@ trajectory_generator = preference_comparisons.AgentTrainerWithVideoBuffering(
     venv=venv,
     rng=rng,
     exploration_frac=0.05,
-    video_folder='./training_videos',
+    video_folder='videos',
     video_length=50,
     name_prefix='rl-video'
 )

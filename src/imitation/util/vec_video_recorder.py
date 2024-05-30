@@ -50,7 +50,7 @@ class VecVideoRecorder(VecEnvWrapper):
         self.record_video_trigger = record_video_trigger
         self.video_recorder = None
 
-        self.video_folder = video_folder
+        self.video_folder = os.path.abspath(video_folder)
         # Create output folder if needed
         os.makedirs(self.video_folder, exist_ok=True)
 
