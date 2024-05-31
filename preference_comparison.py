@@ -21,7 +21,7 @@ fragmenter = preference_comparisons.RandomFragmenter(
     rng=rng,
 )
 #gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGathererAPI(rng=rng)
+gatherer = preference_comparisons.HumanGathererAPI(rng=rng, total_feedbacks=200)
 preference_model = preference_comparisons.PreferenceModel(reward_net)
 reward_trainer = preference_comparisons.BasicRewardTrainer(
     preference_model=preference_model,

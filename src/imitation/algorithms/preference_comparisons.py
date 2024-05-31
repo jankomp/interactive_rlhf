@@ -1216,6 +1216,7 @@ class HumanGathererAPI(PreferenceGatherer):
 
     def __init__(
         self,
+        total_feedbacks: int,
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
     ) -> None:
@@ -1225,19 +1226,26 @@ class HumanGathererAPI(PreferenceGatherer):
         CORS(self.app)
         self.videos = ['','']
         self.queue = Queue()
+        self.feedback_count = 0
+        self.total_feedbacks = total_feedbacks
         self.app.route('/key_press', methods=['POST'])(self.key_press)
         self.app.route('/stream')(self.stream)
         self.app.route('/videos/<path:filename>')(self.serve_video)
+        self.app.route('/total_feedbacks')(self.get_total_feedbacks)
         print('Starting server in a new thread')
         Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
 
     def send_videos(self):
         yield 'data: {}\n\n'.format(json.dumps(self.videos))
 
+    def get_total_feedbacks(self):
+        return jsonify({'total_feedbacks': self.total_feedbacks})
+
     def key_press(self):
         key = request.json.get('key')
-        self.queue.put(key)
-        return jsonify({'message': 'Success'})
+        if self.queue.empty():
+            self.queue.put(key)
+        return jsonify({'message': 'Success', 'feedback_count': self.feedback_count})
     
     def stream(self):
         return Response(self.send_videos(), mimetype='text/event-stream')
@@ -1252,7 +1260,7 @@ class HumanGathererAPI(PreferenceGatherer):
         self.send_videos()        
 
     def get_human_feedback(self) -> float:
-        key = self.queue.get()  # This will block until a key is available
+        key = self.queue.get()
         if key == 'ArrowLeft':
             return 0.0
         elif key == 'ArrowRight':
@@ -1273,7 +1281,7 @@ class HumanGathererAPI(PreferenceGatherer):
             if video_path1 is None or video_path2 is None:
                 self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
                 continue
-
+            self.feedback_count += 1
             self.display_videos(video_path1, video_path2)
             feedback = self.get_human_feedback()
             clear_output(wait=True)
@@ -1281,6 +1289,7 @@ class HumanGathererAPI(PreferenceGatherer):
                 self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
                 continue
             preferences.append(feedback)
+        self.display_videos('','')
 
         return np.array(preferences, dtype=np.float32)
 
