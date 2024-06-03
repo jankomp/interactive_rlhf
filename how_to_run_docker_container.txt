@@ -3,7 +3,7 @@ Build docker image from Dockerfile
 $ docker build -t interactive-rlhf .
 
 Create container from the docker image named interactive-rlhf
-$ docker run -d -p 5000:5000 --name interactive-rlhf interactive-rlhf
+$ docker run -it -p 5000:5000 --name interactive-rlhf interactive-rlhf
 
 For later uses when the container is already created:
 $ docker start interactive-rlhf

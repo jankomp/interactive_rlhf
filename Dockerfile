@@ -89,11 +89,11 @@ RUN pip install -e .
 RUN pip install gymnasium[mujoco]
 
 # for presenting the videos when gathering preferences from humans
-RUN pip install opencv-python pygame moviepy
+RUN pip install opencv-python pygame moviepy flask flask_cors
 
 
 # Default entrypoints
-CMD ["pytest", "-n", "auto", "-vv", "tests/"]
+CMD ["/bin/bash"]
 
 # HOW TO RUN JUPYTER NOTEBOOK FOR RENDERING VIDEO
 # IN THE DOCKER CONTAINER SHELL:
