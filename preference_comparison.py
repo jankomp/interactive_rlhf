@@ -1,6 +1,6 @@
 import random
 from imitation.algorithms import preference_comparisons
-from imitation.rewards.reward_nets import BasicRewardNet
+from imitation.rewards.reward_nets import BasicRewardNet, RewardEnsemble
 from imitation.util.networks import RunningNorm
 from imitation.util.util import make_vec_env
 from imitation.policies.base import FeedForward32Policy, NormalizeFeaturesExtractor
@@ -8,28 +8,47 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
 
+total_timesteps = 100_000
+total_comparisons = 1000
+
 rng = np.random.default_rng(0)
 
-venv = make_vec_env("Reacher-v4", rng=rng, render_mode='rgb_array', n_envs=1)
+venv = make_vec_env("Hopper-v4", rng=rng, render_mode='rgb_array', n_envs=1, max_episode_steps=200, env_make_kwargs={'terminate_when_unhealthy': False})
 
-reward_net = BasicRewardNet(
-    venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm
+reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
+reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
+
+preference_model = preference_comparisons.PreferenceModel(reward_net)
+# reward_trainer = preference_comparisons.BasicRewardTrainer(
+#     preference_model=preference_model,
+#     loss=preference_comparisons.CrossEntropyRewardLoss(),
+#     epochs=3,
+#     rng=rng,
+# )
+reward_trainer = preference_comparisons.EnsembleTrainer(
+    preference_model,
+    loss=preference_comparisons.CrossEntropyRewardLoss(),
+    rng=rng,
+    epochs=3,
+    # batch_size: int = 32,
+    # minibatch_size: Optional[int] = None,
+    # lr: float = 1e-3,
+    # custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+    # regularizer_factory: Optional[regularizers.RegularizerFactory] = None,
 )
 
-fragmenter = preference_comparisons.RandomFragmenter(
+base_fragmenter = preference_comparisons.RandomFragmenter(
     warning_threshold=0,
     rng=rng,
 )
-#gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGathererAPI(rng=rng, total_feedbacks=200)
-preference_model = preference_comparisons.PreferenceModel(reward_net)
-reward_trainer = preference_comparisons.BasicRewardTrainer(
-    preference_model=preference_model,
-    loss=preference_comparisons.CrossEntropyRewardLoss(),
-    epochs=3,
-    rng=rng,
+fragmenter = preference_comparisons.ActiveSelectionFragmenter(
+        preference_model,
+        base_fragmenter,
+        2.0,
 )
 
+#gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
+gatherer = preference_comparisons.HumanGathererAPI(rng=rng, total_feedbacks=total_comparisons, fragmenter=fragmenter)
 
 # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
 # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,
@@ -61,7 +80,7 @@ trajectory_generator = preference_comparisons.AgentTrainerWithVideoBuffering(
     rng=rng,
     exploration_frac=0.05,
     video_folder='videos',
-    video_length=50,
+    video_length=25,
     name_prefix='rl-video'
 )
 
@@ -73,7 +92,7 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     fragmenter=fragmenter,
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
-    fragment_length=50,
+    fragment_length=25,
     transition_oversampling=1,
     initial_comparison_frac=0.1,
     allow_variable_horizon=False,
@@ -82,8 +101,8 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
 )
 
 pref_comparisons.train(
-    total_timesteps=50_000,
-    total_comparisons=500,
+    total_timesteps=total_timesteps,
+    total_comparisons=total_comparisons,
 )
 
 from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
@@ -116,4 +135,21 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save('imitation_ppo')
+learner.save('rlhf_hopper')
+
+from gymnasium.wrappers import RecordVideo
+
+# Create the environment
+env = gym.make("Hopper-v4", render_mode='rgb_array')
+env = RecordVideo(env, './evaluation_videos', name_prefix="hopper", episode_trigger=lambda x: x % 1 == 0) 
+
+# Run the model in the environment
+obs, info = env.reset()
+for _ in range(1000):
+        action, _states = learner.predict(obs, deterministic=True)
+        obs, reward, _ ,done, info = env.step(action)
+        if done:
+            obs, info = env.reset()
+            
+
+env.close()

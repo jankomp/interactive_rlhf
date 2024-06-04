@@ -641,6 +641,23 @@ class Fragmenter(abc.ABC):
             a sequence of fragment pairs
         """  # noqa: DAR202
 
+    @abc.abstractmethod
+    def get_fragment_pair(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        fragment_length: int,
+        )  -> TrajectoryWithRewPair:
+        """Create a single fragment pair out of a sequence of trajectories.
+
+        Args:
+            trajectories: collection of trajectories that will be split up into
+                fragments
+            fragment_length: the length of each sampled fragment
+
+        Returns:
+            a single fragment pair
+        """  # jk
+
 
 class RandomFragmenter(Fragmenter):
     """Sample fragments of trajectories uniformly at random with replacement.
@@ -744,6 +761,60 @@ class RandomFragmenter(Fragmenter):
         # we create a single iterator of the list and zip it with itself:
         iterator = iter(fragments)
         return list(zip(iterator, iterator))
+    
+    def get_fragment_pair(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        fragment_length: int,
+    ) -> Tuple[TrajectoryWithRew, TrajectoryWithRew]:
+        """Get a pair of fragments randomly.
+
+        This method should return a pair of fragments that can be used for preference comparison.
+        The specific implementation can vary depending on the fragmenter. For example, in the
+        RandomFragmenter, this returns a pair of fragments selected randomly.
+
+        Args:
+            trajectories: A sequence of trajectories to sample from.
+            fragment_length: The length of each fragment.
+
+        Returns:
+            A pair of fragments.
+        """
+        fragments: List[TrajectoryWithRew] = []
+
+        # filter out all trajectories that are too short
+        trajectories = [traj for traj in trajectories if len(traj) >= fragment_length]
+        if len(trajectories) == 0:
+            raise ValueError(
+                "No trajectories are long enough for the desired fragment length "
+                f"of {fragment_length}.",
+            )
+
+        weights = [len(traj) for traj in trajectories]
+
+        # we need two fragments for each comparison
+        for _ in range(2):
+            traj = self.rng.choice(
+                trajectories,  # type: ignore[arg-type]
+                p=np.array(weights) / sum(weights),
+            )
+            n = len(traj)
+            start = self.rng.integers(0, n - fragment_length, endpoint=True)
+            end = start + fragment_length
+            terminal = (end == n) and traj.terminal
+            fragment = TrajectoryWithRew(
+                obs=traj.obs[start : end + 1],
+                acts=traj.acts[start:end],
+                infos=traj.infos[start:end] if traj.infos is not None else None,
+                rews=traj.rews[start:end],
+                terminal=terminal,
+            )
+            fragments.append(fragment)
+        # fragments is currently a list of single fragments. We want to pair up
+        # fragments to get a list of (fragment1, fragment2) tuples. To do so,
+        # we create a single iterator of the list and zip it with itself:
+        iterator = iter(fragments)
+        return next(zip(iterator, iterator))    
 
 
 class ActiveSelectionFragmenter(Fragmenter):
@@ -857,7 +928,47 @@ class ActiveSelectionFragmenter(Fragmenter):
             else:
                 self.raise_uncertainty_on_not_supported()
         return var_estimate
-    
+
+    def get_fragment_pair(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        fragment_length: int,
+    ) -> Tuple[TrajectoryWithRew, TrajectoryWithRew]:
+        """Get a pair of fragments with the highest uncertainty.
+
+        This method should return a pair of fragments that can be used for preference comparison.
+        The specific implementation can vary depending on the fragmenter. For example, in the
+        ActiveSelectionFragmenter, this returns the pair of fragments with the highest
+        uncertainty.
+
+        Args:
+            trajectories: A sequence of trajectories to sample from.
+            fragment_length: The length of each fragment.
+
+        Returns:
+            A pair of fragments.
+        """
+        # Sample a large number of fragments from all the trajectories
+        fragments_to_sample = int(self.fragment_sample_factor * 2)  # We need two fragments
+        fragment_pairs = self.base_fragmenter(
+            trajectories=trajectories,
+            fragment_length=fragment_length,
+            num_pairs=fragments_to_sample,
+        )
+        var_estimates = np.zeros(len(fragment_pairs))
+        for i, fragment in enumerate(fragment_pairs):
+            frag1, frag2 = fragment
+            trans1 = rollout.flatten_trajectories([frag1])
+            trans2 = rollout.flatten_trajectories([frag2])
+            with th.no_grad():
+                rews1 = self.preference_model.rewards(trans1)
+                rews2 = self.preference_model.rewards(trans2)
+            var_estimate = self.variance_estimate(rews1, rews2)
+            var_estimates[i] = var_estimate
+        fragment_idxs = np.argsort(var_estimates)[::-1]  # sort in descending order
+        # Return the fragment pair that has the highest uncertainty
+        return fragment_pairs[fragment_idxs[0]]
+
 class KingOfTheHillFragmenter(Fragmenter):
     def __init__(
         self,
@@ -1217,6 +1328,7 @@ class HumanGathererAPI(PreferenceGatherer):
     def __init__(
         self,
         total_feedbacks: int,
+        fragmenter: Fragmenter,
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
     ) -> None:
@@ -1228,6 +1340,7 @@ class HumanGathererAPI(PreferenceGatherer):
         self.queue = Queue()
         self.feedback_count = 0
         self.total_feedbacks = total_feedbacks
+        self.fragmenter = fragmenter
         self.app.route('/key_press', methods=['POST'])(self.key_press)
         self.app.route('/stream')(self.stream)
         self.app.route('/videos/<path:filename>')(self.serve_video)
@@ -1270,28 +1383,31 @@ class HumanGathererAPI(PreferenceGatherer):
         elif key == 'ArrowDown':
             return None
         else:
-            print("Invalid input. Please press 'a' for left video, 'd' for right video, 'w' for tie, 's' to skip.")
+            print("Invalid input. Please press 'Left' for left video, 'Right' for right video, 'Up' for tie, 'Down' to skip.")
 
-    def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
+    def __call__(self, trajectories: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         preferences = []
-        for idx, (frag1, frag2) in enumerate(fragment_pairs):
-            video_path1 = find_video_file(frag1.infos)
-            video_path2 = find_video_file(frag2.infos)
+        fragment_pairs = []
+        while len(preferences) < num_pairs:
+            fragment_pair = self.fragmenter.get_fragment_pair(trajectories, fragment_length)
+            video_path1 = find_video_file(fragment_pair[0].infos)
+            video_path2 = find_video_file(fragment_pair[1].infos)
             if video_path1 is None or video_path2 is None:
-                self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                self.logger.log(f"Skipping this pair {len(preferences)} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
                 continue
-            self.feedback_count += 1
             self.display_videos(video_path1, video_path2)
             feedback = self.get_human_feedback()
             clear_output(wait=True)
             if feedback is None:
                 self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
                 continue
+            self.feedback_count += 1
             preferences.append(feedback)
+            fragment_pairs.append(fragment_pair)
         self.display_videos('','')
 
-        return np.array(preferences, dtype=np.float32)
+        return fragment_pairs, np.array(preferences, dtype=np.float32)
 
 
 class PreferenceDataset(data_th.Dataset):
@@ -2094,11 +2210,9 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # (but allows for fragments missing terminal timesteps).
             horizons = (len(traj) for traj in trajectories if traj.terminal)
             self._check_fixed_horizon(horizons)
-            self.logger.log("Creating fragment pairs")
-            fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
             with self.logger.accumulate_means("preferences"):
                 self.logger.log("Gathering preferences")
-                preferences = self.preference_gatherer(fragments)
+                fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs)
             self.dataset.push(fragments, preferences)
             self.logger.log(f"Dataset now contains {len(self.dataset)} comparisons")
 
