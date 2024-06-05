@@ -4,18 +4,25 @@ from imitation.rewards.reward_nets import BasicRewardNet, RewardEnsemble
 from imitation.util.networks import RunningNorm
 from imitation.util.util import make_vec_env
 from imitation.policies.base import FeedForward32Policy, NormalizeFeaturesExtractor
+from imitation.regularization.regularizers import LpRegularizer
+from imitation.regularization.updaters import IntervalParamScaler
 import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
+import torch.optim as optim
 
+# make sure that max_episode_steps is divisible by fragment_length
 total_timesteps = 100_000
 total_comparisons = 1000
+max_episode_steps = 1000
+fragment_length = 25
+gravity = -3
 
 rng = np.random.default_rng(0)
 
-venv = make_vec_env("Hopper-v4", rng=rng, render_mode='rgb_array', n_envs=1, max_episode_steps=200, env_make_kwargs={'terminate_when_unhealthy': False})
+venv = make_vec_env("Hopper-v4", rng=rng, render_mode='rgb_array', n_envs=1, max_episode_steps=max_episode_steps, env_make_kwargs={'terminate_when_unhealthy': False}, gravity=gravity)
 
-reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
+reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(5)]
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
 preference_model = preference_comparisons.PreferenceModel(reward_net)
@@ -25,16 +32,25 @@ preference_model = preference_comparisons.PreferenceModel(reward_net)
 #     epochs=3,
 #     rng=rng,
 # )
+
+
+# Create a lambda updater
+scaling_factor = 0.1
+tolerable_interval = (0.9, 1.1) 
+lambda_updater = IntervalParamScaler(scaling_factor, tolerable_interval)
+# Create a RegularizerFactory
+regularizer_factory = LpRegularizer.create(initial_lambda=0.1, lambda_updater=lambda_updater, p=2, val_split=0.1)
+
 reward_trainer = preference_comparisons.EnsembleTrainer(
     preference_model,
     loss=preference_comparisons.CrossEntropyRewardLoss(),
     rng=rng,
-    epochs=3,
-    # batch_size: int = 32,
-    # minibatch_size: Optional[int] = None,
+    epochs=5,
+    batch_size = 4,
+    minibatch_size = 2,
     # lr: float = 1e-3,
     # custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
-    # regularizer_factory: Optional[regularizers.RegularizerFactory] = None,
+    regularizer_factory = regularizer_factory,
 )
 
 base_fragmenter = preference_comparisons.RandomFragmenter(
@@ -80,7 +96,7 @@ trajectory_generator = preference_comparisons.AgentTrainerWithVideoBuffering(
     rng=rng,
     exploration_frac=0.05,
     video_folder='videos',
-    video_length=25,
+    video_length=fragment_length,
     name_prefix='rl-video'
 )
 
@@ -92,7 +108,7 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     fragmenter=fragmenter,
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
-    fragment_length=25,
+    fragment_length=fragment_length,
     transition_oversampling=1,
     initial_comparison_frac=0.1,
     allow_variable_horizon=False,
@@ -140,9 +156,9 @@ learner.save('rlhf_hopper')
 from gymnasium.wrappers import RecordVideo
 
 # Create the environment
-env = gym.make("Hopper-v4", render_mode='rgb_array')
+env = gym.make("Hopper-v4", render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
+env.model.opt.gravity[2] = gravity
 env = RecordVideo(env, './evaluation_videos', name_prefix="hopper", episode_trigger=lambda x: x % 1 == 0) 
-
 # Run the model in the environment
 obs, info = env.reset()
 for _ in range(1000):

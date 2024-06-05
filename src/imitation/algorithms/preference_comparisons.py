@@ -1289,9 +1289,9 @@ class HumanGathererJupyter(PreferenceGatherer):
         while True:
             x = input()
             if x == 'a':
-                return 0.0
-            elif x == 'd':
                 return 1.0
+            elif x == 'd':
+                return 0.0
             elif x == 'w':
                 return 0.5
             elif x == 's':
@@ -1338,7 +1338,7 @@ class HumanGathererAPI(PreferenceGatherer):
         CORS(self.app)
         self.videos = ['','']
         self.queue = Queue()
-        self.feedback_count = 0
+        self.feedback_count = 1
         self.total_feedbacks = total_feedbacks
         self.fragmenter = fragmenter
         self.app.route('/key_press', methods=['POST'])(self.key_press)
@@ -1375,9 +1375,9 @@ class HumanGathererAPI(PreferenceGatherer):
     def get_human_feedback(self) -> float:
         key = self.queue.get()
         if key == 'ArrowLeft':
-            return 0.0
-        elif key == 'ArrowRight':
             return 1.0
+        elif key == 'ArrowRight':
+            return 0.0
         elif key == 'ArrowUp':
             return 0.5
         elif key == 'ArrowDown':

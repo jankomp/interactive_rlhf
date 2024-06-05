@@ -88,6 +88,7 @@ def make_vec_env(
     post_wrappers: Optional[Sequence[Callable[[gym.Env, int], gym.Env]]] = None,
     env_make_kwargs: Optional[Mapping[str, Any]] = None,
     render_mode: Optional[str] = None,
+    gravity: Optional[float] = None,
 ) -> VecEnv:
     """Makes a vectorized environment.
 
@@ -132,7 +133,9 @@ def make_vec_env(
         assert env_make_kwargs is not None  # Note: to satisfy mypy
         assert spec is not None  # Note: to satisfy mypy
         env = gym.make(spec, render_mode=render_mode, max_episode_steps=max_episode_steps, **env_make_kwargs)
-
+    
+        if gravity is not None: 
+            env.model.opt.gravity[2] = gravity
         # Seed each environment with a different, non-sequential seed for diversity
         # (even if caller is passing us sequentially-assigned base seeds). int() is
         # necessary to work around gym bug where it chokes on numpy int64s.
