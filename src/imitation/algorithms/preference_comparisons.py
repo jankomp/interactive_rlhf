@@ -4,6 +4,8 @@ Trains a reward model and optionally a policy based on preferences
 between trajectory fragments.
 """
 import os
+import random
+import string
 import pygame
 import cv2
 import abc
@@ -60,6 +62,10 @@ import time
 import json
 from flask_cors import CORS
 from threading import Thread
+
+from scipy.spatial.distance import euclidean
+from fastdtw import fastdtw
+from sklearn.manifold import TSNE
 
 class TrajectoryGenerator(abc.ABC):
     """Generator of trajectories with optional training logic."""
@@ -641,24 +647,6 @@ class Fragmenter(abc.ABC):
             a sequence of fragment pairs
         """  # noqa: DAR202
 
-    @abc.abstractmethod
-    def get_fragment_pair(
-        self,
-        trajectories: Sequence[TrajectoryWithRew],
-        fragment_length: int,
-        )  -> TrajectoryWithRewPair:
-        """Create a single fragment pair out of a sequence of trajectories.
-
-        Args:
-            trajectories: collection of trajectories that will be split up into
-                fragments
-            fragment_length: the length of each sampled fragment
-
-        Returns:
-            a single fragment pair
-        """  # jk
-
-
 class RandomFragmenter(Fragmenter):
     """Sample fragments of trajectories uniformly at random with replacement.
 
@@ -968,76 +956,105 @@ class ActiveSelectionFragmenter(Fragmenter):
         fragment_idxs = np.argsort(var_estimates)[::-1]  # sort in descending order
         # Return the fragment pair that has the highest uncertainty
         return fragment_pairs[fragment_idxs[0]]
+    
+class AbsoluteUncertaintyFragmenter(Fragmenter):
+    """Sample fragments of trajectories based on absolute uncertainty.
 
-class KingOfTheHillFragmenter(Fragmenter):
+    Actively picks the fragments with the highest absolute uncertainty
+    of rewards from ensemble model.
+    """
+
     def __init__(
         self,
+        preference_model: PreferenceModel,
+        fragment_sample_factor: float,
         rng: np.random.Generator,
-        iterations: int,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
     ) -> None:
-        super().__init__(custom_logger)
+        """Initialize the absolute uncertainty fragmenter.
+
+        Args:
+            preference_model: an ensemble model that predicts the
+                preference of the first fragment over the other.
+            base_fragmenter: fragmenter instance to get
+                fragment pairs from trajectories
+            fragment_sample_factor: the factor of the number of
+                fragment pairs to sample from the base_fragmenter
+            custom_logger: Where to log to; if None (default), creates a new logger.
+
+        Raises:
+            ValueError: Preference model not wrapped over an ensemble of networks.
+        """
+        super().__init__(custom_logger=custom_logger)
+        if preference_model.ensemble_model is None:
+            raise ValueError(
+                "PreferenceModel not wrapped over an ensemble of networks.",
+            )
+        self.preference_model = preference_model
+        self.fragment_sample_factor = fragment_sample_factor
         self.rng = rng
-        self.iterations = iterations
 
     def __call__(
         self,
         trajectories: Sequence[TrajectoryWithRew],
         fragment_length: int,
-        num_pairs: int,
-    ) -> Sequence[TrajectoryWithRewPair]:
-        pairs: List[TrajectoryWithRewPair] = []
+        num_fragments: int,
+    ) -> Sequence[TrajectoryWithRew]:
+        # sample a large number (self.fragment_sample_factor*num_fragments)
+        # of fragments from all the trajectories
+        fragments_to_sample = int(self.fragment_sample_factor * num_fragments)
 
-        # filter out all trajectories that are too short
-        trajectories = [traj for traj in trajectories if len(traj) >= fragment_length]
-        if len(trajectories) == 0:
-            raise ValueError(
-                "No trajectories are long enough for the desired fragment length "
-                f"of {fragment_length}.",
-            )
+        fragments = self.sample_fragments(trajectories, fragments_to_sample, fragment_length)
 
-        weights = [len(traj) for traj in trajectories]
-
-        # we need two fragments for each comparison
-        while len(pairs) < num_pairs:
-            # Start with a random pair
-            traj1, traj2 = self.rng.choice(trajectories, 2, replace=False, p=np.array(weights) / sum(weights))
-            pairs.append((traj1, traj2))
-
-            for _ in range(self.iterations):
-                # Keep the trajectory with the higher reward
-                if sum(traj1.rews) > sum(traj2.rews):
-                    keep_traj = traj1
-                else:
-                    keep_traj = traj2
-
-                # Randomly sample another trajectory for the next pair
-                traj2 = self.rng.choice(trajectories, replace=False, p=np.array(weights) / sum(weights))
-
-                # Create a fragment from the kept trajectory and the new trajectory
-                start1 = self.rng.integers(0, len(keep_traj) - fragment_length, endpoint=True)
-                start2 = self.rng.integers(0, len(traj2) - fragment_length, endpoint=True)
-                end1 = start1 + fragment_length
-                end2 = start2 + fragment_length
-                terminal1 = (end1 == len(keep_traj)) and keep_traj.terminal
-                terminal2 = (end2 == len(traj2)) and traj2.terminal
-                fragment1 = TrajectoryWithRew(
-                    obs=keep_traj.obs[start1 : end1 + 1],
-                    acts=keep_traj.acts[start1:end1],
-                    infos=keep_traj.infos[start1:end1] if keep_traj.infos is not None else None,
-                    rews=keep_traj.rews[start1:end1],
-                    terminal=terminal1,
+        var_estimates = np.zeros(len(fragments))
+        for i, fragment in enumerate(fragments):
+            trans = rollout.flatten_trajectories([fragment])
+            with th.no_grad():
+                rews = self.preference_model.rewards(trans)
+            var_estimate = self.variance_estimate(rews)
+            var_estimates[i] = var_estimate
+        fragment_idxs = np.argsort(np.abs(var_estimates))[::-1]  # sort in descending order
+        # return fragments that have the highest absolute uncertainty
+        return [fragments[idx] for idx in fragment_idxs[:num_fragments]]
+    
+    def sample_fragments(self,
+        trajectories: Sequence[TrajectoryWithRew],
+        framgents_to_sample: int,
+        fragment_length: int
+    ) -> Sequence[TrajectoryWithRew]:
+        if sum([len(traj) - fragment_length for traj in trajectories]) < framgents_to_sample * fragment_length:
+            raise ValueError("Not enough data to sample the required number of fragments")
+        
+        fragments = []
+        for traj in trajectories:
+            if len(traj) < fragment_length:
+                continue
+            start = self.rng.integers(0, fragment_length, endpoint=True)
+            #sample the fragments from the trajectory starting from start until the remaining size is smaller than fragment_length
+            for i in range(start, len(traj) - fragment_length + 1, fragment_length):
+                fragment = TrajectoryWithRew(
+                    obs=traj.obs[i : i + fragment_length + 1],
+                    acts=traj.acts[i:i + fragment_length],
+                    infos=traj.infos[i:i + fragment_length] if traj.infos is not None else None,
+                    rews=traj.rews[i:i + fragment_length],
+                    terminal=traj.terminal,
                 )
-                fragment2 = TrajectoryWithRew(
-                    obs=traj2.obs[start2 : end2 + 1],
-                    acts=traj2.acts[start2:end2],
-                    infos=traj2.infos[start2:end2] if traj2.infos is not None else None,
-                    rews=traj2.rews[start2:end2],
-                    terminal=terminal2,
-                )
-                pairs.append((fragment1, fragment2))
+                fragments.append(fragment)
 
-        return pairs
+        return fragments
+
+
+    def variance_estimate(self, rews: th.Tensor) -> float:
+        """Gets the variance estimate from the rewards of a fragment.
+
+        Args:
+            rews: rewards obtained by all the ensemble models for the fragment.
+                Shape - (fragment_length, num_ensemble_members)
+
+        Returns:
+            the variance estimate.
+        """
+        return rews.var().item()
 
 
 class PreferenceGatherer(abc.ABC):
@@ -1406,6 +1423,108 @@ class HumanGathererAPI(PreferenceGatherer):
             preferences.append(feedback)
             fragment_pairs.append(fragment_pair)
         self.display_videos('','')
+
+        return fragment_pairs, np.array(preferences, dtype=np.float32)
+    
+class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
+    """Collects human feedback by displaying the fragments in a dimensionally reduced scatterplot, displaying videos and receiving preferences over groups."""
+
+    def __init__(
+        self,
+        total_feedbacks: int,
+        rng: Optional[np.random.Generator] = None,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+    ) -> None:
+        super().__init__(rng=rng, custom_logger=custom_logger)
+        self.window_name = "Trajectory Comparison"
+        self.app = Flask(__name__)
+        CORS(self.app)
+        self.feedback_count = 0
+        self.total_feedbacks = total_feedbacks
+        self.current_fragments_hash = None
+        self.fragments_with_id = []
+        self.fragments_for_frontend = []
+        self.queue = Queue() 
+        self.app.route('/stream')(self.stream)
+        self.app.route('/videos/<path:filename>')(self.serve_video)
+        self.app.route('/total_feedbacks')(self.get_total_feedbacks)
+        self.app.route('/fragments')(self.get_fragments)
+        self.app.route('/preference_pairs', methods=['POST'])(self.post_preference_pairs)
+        print('Starting server in a new thread')
+        Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
+    
+    def get_total_feedbacks(self):
+        return jsonify({'total_feedbacks': self.total_feedbacks})
+    
+    def stream(self):
+        return Response(self.current_fragments_hash, mimetype='text/event-stream')
+
+    def serve_video(self, filename):
+        if not os.path.isabs(filename):
+            filename = os.path.join('/', filename)
+        return send_file(filename)
+    
+    def get_fragments(self):
+        return jsonify({self.fragments_for_frontend})
+    
+    def post_preference_pairs(self):
+        data = request.json
+        self.queue.put(data)
+        print(data)
+        return jsonify({'message': 'Success'})
+    
+    
+    def convert_to_low_dimensional_data(self, high_dimensional_data, fragment_length, n_trajectory_components, reduce_to):
+        def dtw_distance(t1, t2):
+            # https://pypi.org/project/fastdtw/
+            # FastDTW: Toward accurate dynamic time warping in linear time and space.” Intelligent Data Analysis 
+            # x = np.array(x)
+            # y = np.array(y)
+            t1 = t1.reshape((fragment_length, n_trajectory_components))
+            t2 = t2.reshape((fragment_length, n_trajectory_components))
+            distance, _ = fastdtw(t1, t2, dist=euclidean)
+            return distance
+
+        tsne = TSNE(n_components=reduce_to, perplexity=4, metric=dtw_distance)
+        low_dimensional_data = tsne.fit_transform(high_dimensional_data)
+        return low_dimensional_data
+    
+    def dimensional_reduction(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
+        """Reduce the dimensionality of the fragments. Return id, x, y, video_path of the fragments"""
+        n_components = 2
+        n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
+        # Convert fragments to fragments_data
+        fragments_data = []
+        for fragment in fragments:
+            fragment_data = np.concatenate([np.array(list(fragment.obs[i]) + list(fragment.acts[i])) for i in range(fragment_length)])
+            fragments_data.append(fragment_data)
+        fragments_data = np.array(fragments_data)
+
+        low_dimensional_data = self.convert_to_low_dimensional_data(fragments_data, fragment_length, n_trajectory_components, n_components)
+
+        fragments_with_id = [{'id': id, 'x': x, 'y': y, 'video_path': find_video_file(fragment.infos)} for id, (x, y), fragment in zip(range(len(fragments)), low_dimensional_data, fragments)]
+        print(fragments_with_id)
+
+        return fragments_with_id
+
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+        """Gather human preferences for the given fragment pairs."""
+        fragment_pairs = []
+        preferences = []
+        self.fragments_for_frontend = self.dimensional_reduction(fragments, fragment_length=fragment_length)
+        self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+        while self.feedback_count < num_pairs:
+            feedback = self.queue.get()
+            # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
+            # we create one preference for each possible pair of fragments across the two groups with the value of preference
+            for i in feedback['group1']:
+                for j in feedback['group2']:
+                    fragment_pairs.append((fragments[i], fragments[j]))
+                    preferences.append(feedback['preference'])
+                    self.feedback_count += 1
+
+        self.current_fragments_hash = None
 
         return fragment_pairs, np.array(preferences, dtype=np.float32)
 
@@ -2141,6 +2260,12 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 rng=self.rng,
             )
 
+        if isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
+            assert isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter)
+
+        if isinstance(self.preference_gatherer, HumanGathererAPI):
+            assert isinstance(self.fragmenter, ActiveSelectionFragmenter)
+
         self.preference_gatherer.logger = self.logger
 
         self.fragment_length = fragment_length
@@ -2210,9 +2335,25 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # (but allows for fragments missing terminal timesteps).
             horizons = (len(traj) for traj in trajectories if traj.terminal)
             self._check_fixed_horizon(horizons)
-            with self.logger.accumulate_means("preferences"):
-                self.logger.log("Gathering preferences")
-                fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs)
+
+            #for the pairwise comparison of HumanGathererAPI we need to create one trajectory pair for every user query
+            if isinstance(self.preference_gatherer, HumanGathererAPI):
+                with self.logger.accumulate_means("preferences"):
+                    self.logger.log("Gathering preferences")
+                    fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs)
+            elif isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
+                self.logger.log("Creating fragment pairs")
+                fragments = self.fragmenter(trajectories, self.fragment_length, num_fragments=num_pairs)
+                with self.logger.accumulate_means("preferences"):
+                    self.logger.log("Gathering preferences")
+                    preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
+            else:            
+                self.logger.log("Creating fragment pairs")
+                fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
+                with self.logger.accumulate_means("preferences"):
+                    self.logger.log("Gathering preferences")
+                    preferences = self.preference_gatherer(fragments)
+
             self.dataset.push(fragments, preferences)
             self.logger.log(f"Dataset now contains {len(self.dataset)} comparisons")
 
