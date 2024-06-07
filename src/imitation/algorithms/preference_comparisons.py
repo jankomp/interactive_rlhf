@@ -1452,18 +1452,18 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app.route('/videos/<path:filename>')(self.serve_video)
         self.app.route('/total_feedbacks')(self.get_total_feedbacks)
         self.app.route('/fragments')(self.get_fragments)
-        self.app.route('/preference_pairs', methods=['POST'])(self.post_preference_pairs)
+        self.app.route('/preference', methods=['POST'])(self.post_preference_pairs)
         print('Starting server in a new thread')
         Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
     
     def get_total_feedbacks(self):
         return jsonify({'total_feedbacks': self.total_feedbacks})
     
-    def send_videos(self):
+    def send_fragment_hash(self):
         yield 'data: {}\n\n'.format(json.dumps(self.current_fragments_hash))
 
     def stream(self):
-        return Response(self.send_videos(), mimetype='text/event-stream')
+        return Response(self.send_fragment_hash(), mimetype='text/event-stream')
 
     def serve_video(self, filename):
         if not os.path.isabs(filename):
@@ -1471,13 +1471,11 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return send_file(filename)
     
     def get_fragments(self):
-        print(self.fragments_for_frontend)
         return jsonify(self.fragments_for_frontend)
     
     def post_preference_pairs(self):
         data = request.json
         self.queue.put(data)
-        print(data)
         return jsonify({'message': 'Success'})
     
     
@@ -1524,14 +1522,17 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             feedback = self.queue.get()
             # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
             # we create one preference for each possible pair of fragments across the two groups with the value of preference
-            for i in feedback['group1']:
-                for j in feedback['group2']:
-                    fragment_pairs.append((fragments[i], fragments[j]))
-                    preferences.append(feedback['preference'])
-                    self.feedback_count += 1
+            preference = 1.0 if feedback['preference'] == 'ArrowLeft' else 0.0 if feedback['preference'] == 'ArrowRight' else 0.5 if feedback['preference'] == 'ArrowUp' else None
+            if preference is not None:
+                for i in feedback['group1']:
+                    for j in feedback['group2']:
+                        fragment_pair = TrajectoryWithRewPair(fragments[i], fragments[j])
+                        fragment_pairs.append(fragment_pair)
+                        preferences.append(preference)
+                        self.feedback_count += 1
+            print(f'Feedback count: {self.feedback_count}/{num_pairs}')
 
         self.current_fragments_hash = None
-
         return fragment_pairs, np.array(preferences, dtype=np.float32)
 
 
@@ -2352,7 +2353,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_fragments=num_pairs)
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
+                    fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
             else:            
                 self.logger.log("Creating fragment pairs")
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
