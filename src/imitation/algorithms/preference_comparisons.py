@@ -1029,14 +1029,17 @@ class AbsoluteUncertaintyFragmenter(Fragmenter):
         for traj in trajectories:
             if len(traj) < fragment_length:
                 continue
-            start = self.rng.integers(0, fragment_length, endpoint=True)
+            
+            #start = self.rng.integers(0, fragment_length, endpoint=True)
+            start = 0 # TODO: fix the saving of the videoclips (make start and end of videoclip coincide with fragment's), then uncomment the above line and remove this line
+
             #sample the fragments from the trajectory starting from start until the remaining size is smaller than fragment_length
-            for i in range(start, len(traj) - fragment_length + 1, fragment_length):
+            for i in range(start, len(traj) - start, fragment_length):
                 fragment = TrajectoryWithRew(
                     obs=traj.obs[i : i + fragment_length + 1],
-                    acts=traj.acts[i:i + fragment_length],
-                    infos=traj.infos[i:i + fragment_length] if traj.infos is not None else None,
-                    rews=traj.rews[i:i + fragment_length],
+                    acts=traj.acts[i : i + fragment_length],
+                    infos=traj.infos[i : i + fragment_length] if traj.infos is not None else None,
+                    rews=traj.rews[i : i + fragment_length],
                     terminal=traj.terminal,
                 )
                 fragments.append(fragment)
@@ -1456,8 +1459,11 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     def get_total_feedbacks(self):
         return jsonify({'total_feedbacks': self.total_feedbacks})
     
+    def send_videos(self):
+        yield 'data: {}\n\n'.format(json.dumps(self.current_fragments_hash))
+
     def stream(self):
-        return Response(self.current_fragments_hash, mimetype='text/event-stream')
+        return Response(self.send_videos(), mimetype='text/event-stream')
 
     def serve_video(self, filename):
         if not os.path.isabs(filename):
@@ -1465,7 +1471,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return send_file(filename)
     
     def get_fragments(self):
-        return jsonify({self.fragments_for_frontend})
+        print(self.fragments_for_frontend)
+        return jsonify(self.fragments_for_frontend)
     
     def post_preference_pairs(self):
         data = request.json
@@ -1502,8 +1509,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         low_dimensional_data = self.convert_to_low_dimensional_data(fragments_data, fragment_length, n_trajectory_components, n_components)
 
-        fragments_with_id = [{'id': id, 'x': x, 'y': y, 'video_path': find_video_file(fragment.infos)} for id, (x, y), fragment in zip(range(len(fragments)), low_dimensional_data, fragments)]
-        print(fragments_with_id)
+        fragments_with_id = [{'id': id, 'x': float(x), 'y': float(y), 'video_path': find_video_file(fragment.infos)} for id, (x, y), fragment in zip(range(len(fragments)), low_dimensional_data, fragments)]
 
         return fragments_with_id
 

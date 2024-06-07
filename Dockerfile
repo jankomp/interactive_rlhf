@@ -89,7 +89,7 @@ RUN pip install -e .
 RUN pip install gymnasium[mujoco]
 
 # for presenting the videos when gathering preferences from humans
-RUN pip install opencv-python pygame moviepy flask flask_cors
+RUN pip install opencv-python pygame moviepy flask flask_cors fast_dtw
 
 
 # Default entrypoints
