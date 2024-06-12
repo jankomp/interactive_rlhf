@@ -1000,11 +1000,7 @@ class AbsoluteUncertaintyFragmenter(Fragmenter):
         fragment_length: int,
         num_fragments: int,
     ) -> Sequence[TrajectoryWithRew]:
-        # sample a large number (self.fragment_sample_factor*num_fragments)
-        # of fragments from all the trajectories
-        fragments_to_sample = int(self.fragment_sample_factor * num_fragments)
-
-        fragments = self.sample_fragments(trajectories, fragments_to_sample, fragment_length)
+        fragments = self.sample_fragments(trajectories, num_fragments, fragment_length)
 
         var_estimates = np.zeros(len(fragments))
         for i, fragment in enumerate(fragments):
@@ -1022,7 +1018,7 @@ class AbsoluteUncertaintyFragmenter(Fragmenter):
         framgents_to_sample: int,
         fragment_length: int
     ) -> Sequence[TrajectoryWithRew]:
-        if sum([len(traj) - fragment_length for traj in trajectories]) < framgents_to_sample * fragment_length:
+        if sum([len(traj) - (len(traj) % fragment_length) for traj in trajectories]) < framgents_to_sample * fragment_length:
             raise ValueError("Not enough data to sample the required number of fragments")
         
         fragments = []
@@ -1457,7 +1453,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
     
     def get_total_feedbacks(self):
-        return jsonify({'total_feedbacks': self.total_feedbacks})
+        return jsonify({'given_feedbacks': self.feedback_count, 'total_feedbacks': self.total_feedbacks})
     
     def send_fragment_hash(self):
         yield 'data: {}\n\n'.format(json.dumps(self.current_fragments_hash))
@@ -1476,7 +1472,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     def post_preference_pairs(self):
         data = request.json
         self.queue.put(data)
-        return jsonify({'message': 'Success'})
+        self.feedback_count += len(data['group1']) + len(data['group2']) # replace + with * if we want to count the number of pairs instead of the number of fragments
+        return jsonify(self.feedback_count)
     
     
     def convert_to_low_dimensional_data(self, high_dimensional_data, fragment_length, n_trajectory_components, reduce_to):
@@ -1518,6 +1515,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.fragments_for_frontend = self.dimensional_reduction(fragments, fragment_length=fragment_length)
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
+        self.feedback_count = 0
+
         while self.feedback_count < num_pairs:
             feedback = self.queue.get()
             # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
@@ -1526,11 +1525,12 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             if preference is not None:
                 for i in feedback['group1']:
                     for j in feedback['group2']:
-                        fragment_pair = TrajectoryWithRewPair(fragments[i], fragments[j])
+                        fragment_pair = (fragments[i], fragments[j])
                         fragment_pairs.append(fragment_pair)
                         preferences.append(preference)
-                        self.feedback_count += 1
             print(f'Feedback count: {self.feedback_count}/{num_pairs}')
+            print(f'Preferences: {len(preferences)}')
+            print(f'Fragment pairs: {len(fragment_pairs)}')
 
         self.current_fragments_hash = None
         return fragment_pairs, np.array(preferences, dtype=np.float32)
@@ -2350,7 +2350,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                     fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs)
             elif isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
                 self.logger.log("Creating fragment pairs")
-                fragments = self.fragmenter(trajectories, self.fragment_length, num_fragments=num_pairs)
+                num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
+                fragments = self.fragmenter(trajectories, self.fragment_length, num_fragments=num_fragments)
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
                     fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
