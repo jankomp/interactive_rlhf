@@ -1,5 +1,8 @@
 import os
 
+import imageio
+import numpy as np
+
 from gymnasium.wrappers.monitoring import video_recorder
 
 from stable_baselines3.common.logger import Logger
@@ -61,10 +64,15 @@ class VecVideoRecorder(VecEnvWrapper):
         self.recording = False
         self.recorded_frames = 0
 
+        self.episode_length = 0
+        self.fragment_paths = []
+
         self.logger = Logger(folder=log_folder, output_formats=['.txt'])
 
     def reset(self):
         obs = self.venv.reset()
+        self.episode_length = 0
+        self.fragment_paths = []
         self.start_video_recorder()
         return obs
 
@@ -92,6 +100,7 @@ class VecVideoRecorder(VecEnvWrapper):
         obs, rews, dones, infos = self.venv.step_wait()
 
         self.step_id += 1
+        self.episode_length += 1
         if not self.recording and self._video_enabled():
             self.start_video_recorder()
 
@@ -102,9 +111,16 @@ class VecVideoRecorder(VecEnvWrapper):
         if self.recording:
             self.video_recorder.capture_frame()
             self.recorded_frames += 1
-            if (self.recorded_frames == self.video_length )or any(dones):
+            if (self.recorded_frames == self.video_length ) or any(dones):
                 self.logger.info("Saving video to ", self.video_recorder.path)
+                self.fragment_paths.append(self.video_recorder.path)
                 self.close_video_recorder()
+                if any(dones):
+                    try:
+                        self.add_timelines()
+                    except Exception as e:
+                        print("Error caught adding timelines: ", e)
+                        self.logger.info("Error caught adding timelines: ", e)
 
         return obs, rews, dones, infos
 
@@ -122,3 +138,39 @@ class VecVideoRecorder(VecEnvWrapper):
 
     def __del__(self):
         self.close()
+
+    def add_timelines(self):
+        step = 0
+        color = (255, 0, 0)
+        start_point = 0
+
+        for fragment_path in self.fragment_paths:
+            # Open the video file
+            reader = imageio.get_reader(fragment_path)
+
+            # Get the size of the frames in the video
+            frame_height, frame_width = reader.get_meta_data()['source_size']
+
+            # Create a temporary VideoWriter object to write the modified frames to a new video
+            temp_path = 'temp_' + os.path.basename(fragment_path)
+            writer = imageio.get_writer(temp_path, fps=reader.get_meta_data()['fps'])
+
+            for frame in reader:
+                # Calculate the start and end points of the timeline
+                end_point = int(step / self.episode_length * frame_width)
+                
+                # Draw the timeline on the frame
+                frame[frame_height - 5:frame_height, start_point:end_point] = np.array(color, dtype=np.uint8)
+
+                # Write the modified frame to the new video
+                writer.append_data(frame)
+
+                step += 1
+
+            # Close the reader and writer
+            reader.close()
+            writer.close()
+
+            # Overwrite the original video with the new video
+            os.remove(fragment_path)
+            os.rename(temp_path, fragment_path)
