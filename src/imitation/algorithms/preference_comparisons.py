@@ -377,6 +377,7 @@ class AgentTrainerWithVideoBuffering(AgentTrainer):
         video_length: int = 200,
         record_video_trigger: Optional[Callable[[int], bool]] = None,
         name_prefix: str = 'rl-video',
+        timeline: Optional[bool] = False,
     ) -> None:
         """Initialize the agent trainer with video buffering.
 
@@ -414,7 +415,8 @@ class AgentTrainerWithVideoBuffering(AgentTrainer):
             video_folder=video_folder,
             record_video_trigger=record_video_trigger,
             video_length=video_length,
-            name_prefix=name_prefix
+            name_prefix=name_prefix,
+            timeline=timeline,
         )
 
         super().__init__(
@@ -1433,9 +1435,10 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         total_feedbacks: int,
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        augment_to_group_size = 10,
     ) -> None:
         super().__init__(rng=rng, custom_logger=custom_logger)
-        self.window_name = "Trajectory Comparison"
+        self.augment_to_group_size = augment_to_group_size
         self.app = Flask(__name__)
         CORS(self.app)
         self.feedback_count = 0
@@ -1472,7 +1475,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     def post_preference_pairs(self):
         data = request.json
         self.queue.put(data)
-        self.feedback_count += len(data['group1']) + len(data['group2']) # replace + with * if we want to count the number of pairs instead of the number of fragments
+        self.feedback_count += (10 if len(data['group1']) < 10 else len(data['group1'])) + (10 if len(data['group2']) < 10 else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
         return jsonify(self.feedback_count)
     
     
@@ -1523,8 +1526,17 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             # we create one preference for each possible pair of fragments across the two groups with the value of preference
             preference = 1.0 if feedback['preference'] == 'ArrowLeft' else 0.0 if feedback['preference'] == 'ArrowRight' else 0.5 if feedback['preference'] == 'ArrowUp' else None
             if preference is not None:
-                for i in feedback['group1']:
-                    for j in feedback['group2']:
+                group1 = feedback['group1']
+                group2 = feedback['group2']
+
+                # If the group size is smaller than self.augment_to_group_size, randomly sample trajectories to increase its size
+                if len(group1) < self.augment_to_group_size:
+                    group1 += random.choices(group1, k=self.augment_to_group_size - len(group1))
+                if len(group2) < self.augment_to_group_size:
+                    group2 += random.choices(group2, k=self.augment_to_group_size - len(group2))
+
+                for i in group1:
+                    for j in group2:
                         fragment_pair = (fragments[i], fragments[j])
                         fragment_pairs.append(fragment_pair)
                         preferences.append(preference)

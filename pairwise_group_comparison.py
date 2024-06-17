@@ -12,11 +12,11 @@ import numpy as np
 import torch.optim as optim
 
 # make sure that max_episode_steps is divisible by fragment_length
-total_timesteps = 20_000
+total_timesteps = 10_000
 total_comparisons = 100
 max_episode_steps = 1000
 fragment_length = 25
-gravity = -3
+gravity = -1
 
 rng = np.random.default_rng(0)
 
@@ -93,7 +93,8 @@ trajectory_generator = preference_comparisons.AgentTrainerWithVideoBuffering(
     exploration_frac=0.05,
     video_folder='videos',
     video_length=fragment_length,
-    name_prefix='rl-video'
+    name_prefix='rl-video',
+    timeline=True,
 )
 
 

@@ -30,7 +30,7 @@ class VecVideoRecorder(VecEnvWrapper):
     """
 
     def __init__(self, venv, video_folder, record_video_trigger,
-                 video_length=200, name_prefix='rl-video', log_folder='logs'):
+                 video_length=200, name_prefix='rl-video', log_folder='logs', timeline=False):
 
         VecEnvWrapper.__init__(self, venv)
 
@@ -68,6 +68,7 @@ class VecVideoRecorder(VecEnvWrapper):
         self.fragment_paths = []
 
         self.logger = Logger(folder=log_folder, output_formats=['.txt'])
+        self.timeline = timeline
 
     def reset(self):
         obs = self.venv.reset()
@@ -115,12 +116,13 @@ class VecVideoRecorder(VecEnvWrapper):
                 self.logger.info("Saving video to ", self.video_recorder.path)
                 self.fragment_paths.append(self.video_recorder.path)
                 self.close_video_recorder()
-                if any(dones):
-                    try:
-                        self.add_timelines()
-                    except Exception as e:
-                        print("Error caught adding timelines: ", e)
-                        self.logger.info("Error caught adding timelines: ", e)
+                if self.timeline:
+                    if any(dones):
+                        try:
+                            self.add_timelines()
+                        except Exception as e:
+                            print("Error caught adding timelines: ", e)
+                            self.logger.info("Error caught adding timelines: ", e)
 
         return obs, rews, dones, infos
 
