@@ -98,4 +98,4 @@ CMD ["/bin/bash"]
 # HOW TO RUN JUPYTER NOTEBOOK FOR RENDERING VIDEO
 # IN THE DOCKER CONTAINER SHELL:
 # $ cd docs/tutorials
-# $ xvfb-run -s "-screen 0 1400x900x24" jupyter notebook --ip 0.0.0.0 --no-browser --allow-root --NotebookApp.token=''
+# $ xvfb-run -s "-screen 0 1400x900x24" jupyter notebook --ip 0.0.0.0 --port 5000 --no-browser --allow-root --NotebookApp.token=''

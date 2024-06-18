@@ -29,6 +29,7 @@ from typing import (
     overload,
 )
 
+from queue import Queue
 import numpy as np
 import torch as th
 from scipy import special
@@ -66,6 +67,8 @@ from threading import Thread
 from scipy.spatial.distance import euclidean
 from fastdtw import fastdtw
 from sklearn.manifold import TSNE
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
 
 class TrajectoryGenerator(abc.ABC):
     """Generator of trajectories with optional training logic."""
@@ -1184,161 +1187,6 @@ class SyntheticGatherer(PreferenceGatherer):
             ],
         )
         return np.array(rews1, dtype=np.float32), np.array(rews2, dtype=np.float32)
-    
-
-class HumanGatherer(PreferenceGatherer):
-    """Collects human feedback by displaying videos and capturing keyboard inputs."""
-
-    def __init__(
-        self,
-        rng: Optional[np.random.Generator] = None,
-        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
-    ) -> None:
-        super().__init__(rng=rng, custom_logger=custom_logger)
-        self.window_name = "Trajectory Comparison"
-
-    def display_videos(self, video_path1: str, video_path2: str) -> None:
-        """Display two videos side by side."""
-        cap1 = cv2.VideoCapture(video_path1)
-        cap2 = cv2.VideoCapture(video_path2)
-
-        while cap1.isOpened() and cap2.isOpened():
-            ret1, frame1 = cap1.read()
-            ret2, frame2 = cap2.read()
-
-            if not ret1 or not ret2:
-                break
-
-            combined_frame = cv2.hconcat([frame1, frame2])
-            cv2.imshow(self.window_name, combined_frame)
-
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-        cap1.release()
-        cap2.release()
-        cv2.destroyAllWindows()
-
-    def get_human_feedback(self) -> float:
-        """Get human feedback using arrow keys."""
-        pygame.init()
-        screen = pygame.display.set_mode((100, 100))
-        pygame.display.set_caption("Press arrow keys to give feedback")
-
-        feedback = 0.5  # Default to indifference
-
-        waiting_for_input = True
-        while waiting_for_input:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    waiting_for_input = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_UP:
-                        feedback = 0.5
-                        waiting_for_input = False
-                    elif event.key == pygame.K_LEFT:
-                        feedback = 1.0
-                        waiting_for_input = False
-                    elif event.key == pygame.K_RIGHT:
-                        feedback = 0.0
-                        waiting_for_input = False
-                    elif event.key == pygame.K_DOWN:
-                        feedback = 0.5
-                        waiting_for_input = False
-
-        pygame.quit()
-        return feedback
-
-    def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
-        """Gather human preferences for the given fragment pairs."""
-        preferences = []
-        for idx, (frag1, frag2) in enumerate(fragment_pairs):
-            video_path1 = find_video_file(frag1.infos)
-            video_path2 = find_video_file(frag2.infos)
-            if video_path1 is None or video_path2 is None:
-                self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
-                continue
-
-            self.display_videos(video_path1, video_path2)
-            feedback = self.get_human_feedback()
-            clear_output(wait=True)
-            if feedback is None:
-                self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
-                continue
-            preferences.append(feedback)
-
-        return np.array(preferences, dtype=np.float32)
-
-class HumanGathererJupyter(PreferenceGatherer):
-    """Collects human feedback by displaying videos and capturing keyboard inputs."""
-
-    def __init__(
-        self,
-        rng: Optional[np.random.Generator] = None,
-        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
-    ) -> None:
-        super().__init__(rng=rng, custom_logger=custom_logger)
-        self.window_name = "Trajectory Comparison"
-
-    def display_videos(self, video_path1: str, video_path2: str) -> None:
-        display(
-        HTML(f"""
-        <video id="video1" alt="test" controls autoplay>
-        <source src="{video_path1}" type="video/mp4">
-        </video>
-        <video id="video2" alt="test" controls autoplay>
-        <source src="{video_path2}" type="video/mp4">
-        </video>
-        <script>
-        var video1 = document.getElementById('video1');
-        var video2 = document.getElementById('video2');
-        video1.playbackRate = 0.5;
-        video2.playbackRate = 0.5;
-        video1.onended = function() {{
-            setTimeout(function() {{ video1.play(); }}, 1000);
-        }};
-        video2.onended = function() {{
-            setTimeout(function() {{ video2.play(); }}, 1000);
-        }};
-        </script>
-        """))
-    
-    def get_human_feedback(self) -> float:
-        while True:
-            x = input()
-            if x == 'a':
-                return 1.0
-            elif x == 'd':
-                return 0.0
-            elif x == 'w':
-                return 0.5
-            elif x == 's':
-                return None
-            else:
-                print("Invalid input. Please press 'a' for left video, 'd' for right video, 'w' for tie, 's' to skip.")
-                continue
-
-    def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
-        """Gather human preferences for the given fragment pairs."""
-        preferences = []
-        for idx, (frag1, frag2) in enumerate(fragment_pairs):
-            video_path1 = find_video_file(frag1.infos)
-            video_path2 = find_video_file(frag2.infos)
-            if video_path1 is None or video_path2 is None:
-                self.logger.log(f"Skipping this pair {idx} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
-                continue
-
-            self.display_videos(video_path1, video_path2)
-            feedback = self.get_human_feedback()
-            clear_output(wait=True)
-            if feedback is None:
-                self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
-                continue
-            preferences.append(feedback)
-
-        return np.array(preferences, dtype=np.float32)
-
-from queue import Queue
 
 class HumanGathererAPI(PreferenceGatherer):
     """Collects human feedback by displaying videos and capturing keyboard inputs."""
@@ -1424,6 +1272,146 @@ class HumanGathererAPI(PreferenceGatherer):
             preferences.append(feedback)
             fragment_pairs.append(fragment_pair)
         self.display_videos('','')
+
+        return fragment_pairs, np.array(preferences, dtype=np.float32)
+    
+class SyntheticGathererForGroupComparisons(PreferenceGatherer):
+    """Collects synthetic feedback by displaying the fragments in a dimensionally reduced scatterplot and receiving preferences over groups."""
+
+    def __init__(
+        self,
+        rng: Optional[np.random.Generator] = None,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        augment_to_group_size = 10,
+    ) -> None:
+        super().__init__(rng=rng, custom_logger=custom_logger)
+        self.augment_to_group_size = augment_to_group_size
+    
+    def convert_to_low_dimensional_data(self, high_dimensional_data, fragment_length, n_trajectory_components, reduce_to):
+        def dtw_distance(t1, t2):
+            # https://pypi.org/project/fastdtw/
+            # FastDTW: Toward accurate dynamic time warping in linear time and space.” Intelligent Data Analysis 
+            # x = np.array(x)
+            # y = np.array(y)
+            t1 = t1.reshape((fragment_length, n_trajectory_components))
+            t2 = t2.reshape((fragment_length, n_trajectory_components))
+            distance, _ = fastdtw(t1, t2, dist=euclidean)
+            return distance
+
+        tsne = TSNE(n_components=reduce_to, perplexity=4, metric=dtw_distance)
+        low_dimensional_data = tsne.fit_transform(high_dimensional_data)
+        return low_dimensional_data
+    
+    def dimensional_reduction(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
+        """Reduce the dimensionality of the fragments. Return id, x, y, video_path of the fragments"""
+        n_components = 2
+        n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
+        # Convert fragments to fragments_data
+        fragments_data = []
+        for fragment in fragments:
+            fragment_data = np.concatenate([np.array(list(fragment.obs[i]) + list(fragment.acts[i])) for i in range(fragment_length)])
+            fragments_data.append(fragment_data)
+        fragments_data = np.array(fragments_data)
+
+        low_dimensional_data = self.convert_to_low_dimensional_data(fragments_data, fragment_length, n_trajectory_components, n_components)
+
+        fragments_with_id = [{'id': id, 'x': float(x), 'y': float(y), 'reward': fragment.rews.sum()} 
+                         for id, (x, y), fragment in zip(range(len(fragments)), low_dimensional_data, fragments)]
+
+        return fragments_with_id
+    
+
+    def get_group_preferences(self, dimensionally_reduced_fragments, num_pairs: int):
+        group_preferences = []
+        trajectories_in_comparisons = 0
+        X = np.array([[fragment['x'], fragment['y']] for fragment in dimensionally_reduced_fragments])
+
+        # Normalize the data
+        X = StandardScaler().fit_transform(X)
+
+        eps = 0.2
+        min_samples = 3
+        db = DBSCAN(eps=eps, min_samples=min_samples).fit(X)
+        labels = db.labels_
+        n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+
+        # Split the fragments into groups based on the cluster labels
+        groups = [[] for _ in range(n_clusters_)]
+        for i, label in enumerate(labels):
+            if label != -1:  # Ignore noise
+                groups[label].append(dimensionally_reduced_fragments[i])
+
+        #TODO: for now the noise is ignored. should we treat each noise fragment as a separate group instead?
+        
+        group_comparisons = 0
+        completed_group_comparisons = 0
+        # Generate group comparisons
+        while trajectories_in_comparisons < num_pairs:
+            group_comparisons += 1
+            # Pick two random groups
+            group1 = random.choice(groups)
+            group2 = random.choice(groups)
+            while group1 == group2:
+                group2 = random.choice(groups)
+
+            # Calculate the true rewards for each group
+            true_reward_group1 = sum(fragment['reward'] for fragment in group1)
+            true_reward_group2 = sum(fragment['reward'] for fragment in group2)
+
+            if abs(true_reward_group1 - true_reward_group2) < 0.25:
+                continue
+
+            # discard the groupmembers whichs rewards are less than 0.25 away from the other groups mean
+            group1 = [fragment['id'] for fragment in group1 if abs(fragment['reward'] - true_reward_group2) > 0.25]
+            group2 = [fragment['id'] for fragment in group2 if abs(fragment['reward'] - true_reward_group1) > 0.25]
+            if len(group1) == 0 or len(group2) == 0:
+                continue
+
+            # Determine the preference based on the true rewards
+            if true_reward_group1 > true_reward_group2:
+                preference = 1.0
+            elif true_reward_group1 < true_reward_group2:
+                preference = 0.0
+            else:
+                preference = 0.5
+
+            group_preferences.append({
+                'group1': group1,
+                'group2': group2,
+                'preference': preference
+            })
+            completed_group_comparisons += 1
+            trajectories_in_comparisons += len(group1) + len(group2)
+
+        print(f"The system did {group_comparisons} group comparisons, {completed_group_comparisons} of which were completed.")
+
+        return group_preferences
+
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+        """Gather human preferences for the given fragment pairs."""
+        fragment_pairs = []
+        dimensionally_reduced_fragments = self.dimensional_reduction(fragments, fragment_length=fragment_length)
+        
+        comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
+        preferences = []
+        group_preferences = self.get_group_preferences(dimensionally_reduced_fragments, num_pairs)
+        for group_preference in group_preferences:
+            group1 = group_preference['group1']
+            group2 = group_preference['group2']
+            preference = group_preference['preference']
+
+            # If the product of the group sizes is less than 100, augment the smaller group
+            while len(group1) * len(group2) < comparisons_goal:
+                if len(group1) < len(group2):
+                    group1 += random.choices(group1, k=1)
+                else:
+                    group2 += random.choices(group2, k=1)
+
+            for i in group1:
+                for j in group2:
+                    fragment_pair = (fragments[i], fragments[j])
+                    fragment_pairs.append(fragment_pair)
+                    preferences.append(preference)
 
         return fragment_pairs, np.array(preferences, dtype=np.float32)
     
@@ -1520,6 +1508,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         self.feedback_count = 0
 
+        comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
+
         while self.feedback_count < num_pairs:
             feedback = self.queue.get()
             # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
@@ -1529,11 +1519,12 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                 group1 = feedback['group1']
                 group2 = feedback['group2']
 
-                # If the group size is smaller than self.augment_to_group_size, randomly sample trajectories to increase its size
-                if len(group1) < self.augment_to_group_size:
-                    group1 += random.choices(group1, k=self.augment_to_group_size - len(group1))
-                if len(group2) < self.augment_to_group_size:
-                    group2 += random.choices(group2, k=self.augment_to_group_size - len(group2))
+                # If the product of the group sizes is less than 100, augment the smaller group
+                while len(group1) * len(group2) < comparisons_goal:
+                    if len(group1) < len(group2):
+                        group1 += random.choices(group1, k=1)
+                    else:
+                        group2 += random.choices(group2, k=1)
 
                 for i in group1:
                     for j in group2:
@@ -2282,6 +2273,9 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         if isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
             assert isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter)
 
+        if isinstance(self.preference_gatherer, SyntheticGathererForGroupComparisons):
+            assert isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter)
+
         if isinstance(self.preference_gatherer, HumanGathererAPI):
             assert isinstance(self.fragmenter, ActiveSelectionFragmenter)
 
@@ -2360,7 +2354,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
                     fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs)
-            elif isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
+            elif isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter):
                 self.logger.log("Creating fragment pairs")
                 num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_fragments=num_fragments)

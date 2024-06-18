@@ -11,7 +11,7 @@ $ docker start interactive-rlhf
 Run this command in the terminal to get a bash sessions for the container.
 $ docker exec -it interactive-rlhf /bin/bash
 In the container execute this:
-$ xvfb-run -s "-screen 0 1400x900x24" python3 preference_comparison.py
+$ xvfb-run -s "-screen 0 1400x900x24" python3 pairwise_comparison.py
 
 Frontend:
 Run this command in another terminal:
