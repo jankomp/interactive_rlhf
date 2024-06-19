@@ -1322,9 +1322,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
     
 
 
-    def get_group_preferences(self, dimensionally_reduced_fragments, min_reward, max_reward, num_pairs: int):
-        def normalize_reward(reward: float, min_reward: float, max_reward: float) -> float:
-            return (reward - min_reward) / (max_reward - min_reward)
+    def get_group_preferences(self, dimensionally_reduced_fragments, num_pairs: int):
         
         group_preferences = []
         trajectories_in_comparisons = 0
@@ -1349,28 +1347,35 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         #TODO: for now the noise is ignored. should we treat each noise fragment as a separate group instead?
         
-        group_comparisons = 0
         completed_group_comparisons = 0
         # Generate group comparisons
         while trajectories_in_comparisons < num_pairs:
-            group_comparisons += 1
             # Pick two random groups
             group1 = random.choice(groups)
             group2 = random.choice(groups)
             while group1 == group2:
                 group2 = random.choice(groups)
 
-            # Calculate the mean true rewards for each group (normalized)
-            true_reward_group1 = sum(normalize_reward(fragment['reward'], min_reward, max_reward) for fragment in group1) / len(group1)
-            true_reward_group2 = sum(normalize_reward(fragment['reward'], min_reward, max_reward) for fragment in group2) / len(group2)
- 
-            # we want at least a difference of 0.5 in the mean normalized true rewards
-            if abs(true_reward_group1 - true_reward_group2) < 0.25:
-                continue
+            print(f"Before cleaning: Group 1 has {len(group1)} fragments, Group 2 has {len(group2)} fragments")
+            # Calculate the average true rewards for each group
+            true_reward_group1 = sum(fragment['reward'] for fragment in group1) / len(group1)
+            true_reward_group2 = sum(fragment['reward'] for fragment in group2) / len(group2)
+            print(f"Group 1 has an average reward of {true_reward_group1}, Group 2 has an average reward of {true_reward_group2}")
 
-            # discard the groupmembers whichs rewards are less than 0.25 away from the other groups mean
-            group1 = [fragment['id'] for fragment in group1 if abs(fragment['reward'] - true_reward_group2) > 0.25]
-            group2 = [fragment['id'] for fragment in group2 if abs(fragment['reward'] - true_reward_group1) > 0.25]
+            groups_reward_border = (true_reward_group1 + true_reward_group2) / 2
+            print(f"Groups reward border is {groups_reward_border}")
+
+            # discard the members of the unpreferred group with rewards that are larger than groups_reward_border, and members of the preferred group with rewards that are smaller than groups_reward_border
+            if true_reward_group1 < true_reward_group2:
+                group1 = [fragment['id'] for fragment in group1 if fragment['reward'] < groups_reward_border]
+                group2 = [fragment['id'] for fragment in group2 if fragment['reward'] > groups_reward_border]
+            else:
+                group1 = [fragment['id'] for fragment in group1 if fragment['reward'] > groups_reward_border]
+                group2 = [fragment['id'] for fragment in group2 if fragment['reward'] < groups_reward_border]
+
+            print(f"Group 1 has {len(group1)} fragments, Group 2 has {len(group2)} fragments")
+
+            # this should never actually happen, if it does there is a bug in the code
             if len(group1) == 0 or len(group2) == 0:
                 continue
 
@@ -1390,7 +1395,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             completed_group_comparisons += 1
             trajectories_in_comparisons += len(group1) + len(group2)
 
-        print(f"The system did {group_comparisons} group comparisons, {completed_group_comparisons} of which were completed.")
+        print(f"The system did {completed_group_comparisons} group comparisons.")
         print(f"This amounts to a total of {trajectories_in_comparisons} trajectories in comparisons")
 
         return group_preferences
@@ -1399,13 +1404,10 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         dimensionally_reduced_fragments = self.dimensional_reduction(fragments, fragment_length=fragment_length)
-
-        min_reward = min(fragment.rews.sum() for fragment in fragments)
-        max_reward = max(fragment.rews.sum() for fragment in fragments)
         
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
         preferences = []
-        group_preferences = self.get_group_preferences(dimensionally_reduced_fragments, min_reward, max_reward, num_pairs)
+        group_preferences = self.get_group_preferences(dimensionally_reduced_fragments, num_pairs)
         for group_preference in group_preferences:
             group1 = group_preference['group1']
             group2 = group_preference['group2']
