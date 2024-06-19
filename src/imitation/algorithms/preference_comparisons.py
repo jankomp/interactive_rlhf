@@ -1321,7 +1321,11 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         return fragments_with_id
     
 
-    def get_group_preferences(self, dimensionally_reduced_fragments, num_pairs: int):
+
+    def get_group_preferences(self, dimensionally_reduced_fragments, min_reward, max_reward, num_pairs: int):
+        def normalize_reward(reward: float, min_reward: float, max_reward: float) -> float:
+            return (reward - min_reward) / (max_reward - min_reward)
+        
         group_preferences = []
         trajectories_in_comparisons = 0
         X = np.array([[fragment['x'], fragment['y']] for fragment in dimensionally_reduced_fragments])
@@ -1329,7 +1333,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         # Normalize the data
         X = StandardScaler().fit_transform(X)
 
-        eps = 0.2
+        eps = 0.15
         min_samples = 3
         db = DBSCAN(eps=eps, min_samples=min_samples).fit(X)
         labels = db.labels_
@@ -1340,6 +1344,8 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         for i, label in enumerate(labels):
             if label != -1:  # Ignore noise
                 groups[label].append(dimensionally_reduced_fragments[i])
+
+        print(f"DBSCAN found {n_clusters_} clusters. {len(groups)} groups were created.")
 
         #TODO: for now the noise is ignored. should we treat each noise fragment as a separate group instead?
         
@@ -1354,10 +1360,11 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             while group1 == group2:
                 group2 = random.choice(groups)
 
-            # Calculate the true rewards for each group
-            true_reward_group1 = sum(fragment['reward'] for fragment in group1)
-            true_reward_group2 = sum(fragment['reward'] for fragment in group2)
-
+            # Calculate the mean true rewards for each group (normalized)
+            true_reward_group1 = sum(normalize_reward(fragment['reward'], min_reward, max_reward) for fragment in group1) / len(group1)
+            true_reward_group2 = sum(normalize_reward(fragment['reward'], min_reward, max_reward) for fragment in group2) / len(group2)
+ 
+            # we want at least a difference of 0.5 in the mean normalized true rewards
             if abs(true_reward_group1 - true_reward_group2) < 0.25:
                 continue
 
@@ -1384,6 +1391,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             trajectories_in_comparisons += len(group1) + len(group2)
 
         print(f"The system did {group_comparisons} group comparisons, {completed_group_comparisons} of which were completed.")
+        print(f"This amounts to a total of {trajectories_in_comparisons} trajectories in comparisons")
 
         return group_preferences
 
@@ -1391,10 +1399,13 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         dimensionally_reduced_fragments = self.dimensional_reduction(fragments, fragment_length=fragment_length)
+
+        min_reward = min(fragment.rews.sum() for fragment in fragments)
+        max_reward = max(fragment.rews.sum() for fragment in fragments)
         
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
         preferences = []
-        group_preferences = self.get_group_preferences(dimensionally_reduced_fragments, num_pairs)
+        group_preferences = self.get_group_preferences(dimensionally_reduced_fragments, min_reward, max_reward, num_pairs)
         for group_preference in group_preferences:
             group1 = group_preference['group1']
             group2 = group_preference['group2']
@@ -1412,7 +1423,8 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
                     fragment_pair = (fragments[i], fragments[j])
                     fragment_pairs.append(fragment_pair)
                     preferences.append(preference)
-
+            
+        print(f"Generated {len(preferences)} preferences")
         return fragment_pairs, np.array(preferences, dtype=np.float32)
     
 class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
@@ -2343,6 +2355,11 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             trajectories = self.trajectory_generator.sample(num_steps)
             # pop the last trajectory (since the video could not be saved correctly)
             trajectories.pop()
+
+            # Log the true reward
+            for traj in trajectories:
+                for rew in traj.rews:
+                    self.logger.log(f'True reward: {rew}')
 
             # This assumes there are no fragments missing initial timesteps
             # (but allows for fragments missing terminal timesteps).
