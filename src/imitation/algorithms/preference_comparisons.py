@@ -2315,6 +2315,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         total_timesteps: int,
         total_comparisons: int,
         callback: Optional[Callable[[int], None]] = None,
+        tb_log_name: Optional[str] = None
     ) -> Mapping[str, Any]:
         """Train the reward model and the policy if applicable.
 
@@ -2414,8 +2415,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 num_steps += extra_timesteps
             with self.logger.accumulate_means("agent"):
                 self.logger.log(f"Training agent for {num_steps} timesteps")
-                #tb_log_name = f"iteration_{self._iteration}"
-                self.trajectory_generator.train(steps=num_steps)#, tb_log_name=tb_log_name)
+                self.trajectory_generator.train(steps=num_steps, tb_log_name=tb_log_name)
 
             self.logger.dump(self._iteration)
 
