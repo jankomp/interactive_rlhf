@@ -336,7 +336,8 @@ class AgentTrainer(TrajectoryGenerator):
     @logger.setter
     def logger(self, value: imit_logger.HierarchicalLogger) -> None:
         self._logger = value
-        self.algorithm.set_logger(self.logger)
+        #commented, because we want to save tensorboard logs
+        #self.algorithm.set_logger(self.logger)
 
 
 def _get_trajectories(
@@ -2358,11 +2359,6 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # pop the last trajectory (since the video could not be saved correctly)
             trajectories.pop()
 
-            # Log the true reward
-            for traj in trajectories:
-                for rew in traj.rews:
-                    self.logger.log(f'True reward: {rew}')
-
             # This assumes there are no fragments missing initial timesteps
             # (but allows for fragments missing terminal timesteps).
             horizons = (len(traj) for traj in trajectories if traj.terminal)
@@ -2418,7 +2414,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 num_steps += extra_timesteps
             with self.logger.accumulate_means("agent"):
                 self.logger.log(f"Training agent for {num_steps} timesteps")
-                self.trajectory_generator.train(steps=num_steps)
+                #tb_log_name = f"iteration_{self._iteration}"
+                self.trajectory_generator.train(steps=num_steps)#, tb_log_name=tb_log_name)
 
             self.logger.dump(self._iteration)
 
