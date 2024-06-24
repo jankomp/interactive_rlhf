@@ -12,8 +12,8 @@ import numpy as np
 import torch.optim as optim
 
 # make sure that max_episode_steps is divisible by fragment_length
-total_timesteps = 10_000
-total_comparisons = 100
+total_timesteps = 100_000
+total_comparisons = 1000
 max_episode_steps = 1000
 fragment_length = 25
 gravity = -1
@@ -60,7 +60,7 @@ fragmenter = preference_comparisons.AbsoluteUncertaintyFragmenter(
 )
 
 #gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(total_feedbacks=total_comparisons, rng=rng)
+gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(total_feedbacks=total_comparisons, rng=rng, augment_to_group_size=1)
 
 # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
 # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,

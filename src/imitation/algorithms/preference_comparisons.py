@@ -1534,7 +1534,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                 group1 = feedback['group1']
                 group2 = feedback['group2']
 
-                # If the product of the group sizes is less than 100, augment the smaller group
+                # If the product of the group sizes is less than comparison_goal, augment the smaller group
                 while len(group1) * len(group2) < comparisons_goal:
                     if len(group1) < len(group2):
                         group1 += random.choices(group1, k=1)
