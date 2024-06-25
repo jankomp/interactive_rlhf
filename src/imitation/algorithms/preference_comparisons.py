@@ -69,6 +69,10 @@ from fastdtw import fastdtw
 from sklearn.manifold import TSNE
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import AgglomerativeClustering
+from scipy.spatial.distance import pdist, squareform
+
+from scipy.spatial.distance import euclidean
 
 class TrajectoryGenerator(abc.ABC):
     """Generator of trajectories with optional training logic."""
@@ -1061,6 +1065,93 @@ class AbsoluteUncertaintyFragmenter(Fragmenter):
         """
         return rews.var().item()
 
+
+class JsonFragmenter(Fragmenter):
+    def __init__(self, directory: str, custom_logger: Optional[imit_logger.HierarchicalLogger] = None):
+        super().__init__(custom_logger)
+        self.directory = directory
+
+    def __call__(self, trajectories: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Sequence[TrajectoryWithRew]:
+        fragments = trajectories
+        return fragments
+    
+    def _convert_infos(self, infos):
+        converted_infos = []
+        for info in infos:
+            if isinstance(info, dict):
+                converted_info = {k: self._convert_value(v) for k, v in info.items()}
+            else:
+                converted_info = self._convert_value(info)
+            converted_infos.append(converted_info)
+        return converted_infos
+
+    def _convert_value(self, value):
+        if isinstance(value, np.float32):
+            return float(value)
+        elif isinstance(value, np.ndarray):
+            return value.tolist()
+        elif isinstance(value, list):
+            return [self._convert_value(v) for v in value]
+        elif isinstance(value, dict):
+            return {k: self._convert_value(v) for k, v in value.items()}
+        else:
+            return value
+
+    def save(self, fragments: Sequence[TrajectoryWithRew], filename: str):
+        # Convert fragments to a serializable format
+        serializable_fragments = [
+            {
+                "obs": fragment.obs.tolist(),
+                "acts": fragment.acts.tolist(),
+                "infos": self._convert_infos(fragment.infos),
+                "rews": fragment.rews.tolist(),
+                "terminal": fragment.terminal
+            }
+            for fragment in fragments
+        ]
+
+        path = os.path.join(self.directory, filename)
+
+        with open(path, 'w') as f:
+            json.dump(serializable_fragments, f)
+
+    def _revert_infos(self, infos):
+        reverted_infos = []
+        for info in infos:
+            if isinstance(info, dict):
+                reverted_info = {k: self._revert_value(v) for k, v in info.items()}
+            else:
+                reverted_info = self._revert_value(info)
+            reverted_infos.append(reverted_info)
+        return reverted_infos
+
+    def _revert_value(self, value):
+        if isinstance(value, list):
+            return np.array(value, dtype=np.float32) if all(isinstance(v, float) for v in value) else [self._revert_value(v) for v in value]
+        elif isinstance(value, dict):
+            return {k: self._revert_value(v) for k, v in value.items()}
+        else:
+            return value
+
+    def load(self, filename: str) -> Sequence[TrajectoryWithRew]:
+        path = os.path.join(self.directory, filename)
+
+        with open(path, 'r') as f:
+            serializable_fragments = json.load(f)
+
+        # Convert fragments back to the original format
+        fragments = [
+            TrajectoryWithRew(
+                obs=np.array(fragment["obs"]),
+                acts=np.array(fragment["acts"]),
+                infos=self._revert_infos(fragment["infos"]),
+                rews=np.array(fragment["rews"]),
+                terminal=self._revert_value(fragment["terminal"])
+            )
+            for fragment in serializable_fragments
+        ]
+
+        return fragments
 
 class PreferenceGatherer(abc.ABC):
     """Base class for gathering preference comparisons between trajectory fragments."""
@@ -2147,6 +2238,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         allow_variable_horizon: bool = False,
         rng: Optional[np.random.Generator] = None,
         query_schedule: Union[str, type_aliases.Schedule] = "hyperbolic",
+        json_fragmenter: Optional[JsonFragmenter] = None,
     ) -> None:
         """Initialize the preference comparison trainer.
 
@@ -2286,7 +2378,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             )
 
         if isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
-            assert isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter)
+            assert isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter) or isinstance(self.fragmenter, JsonFragmenter)
 
         if isinstance(self.preference_gatherer, SyntheticGathererForGroupComparisons):
             assert isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter)
@@ -2309,6 +2401,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             raise ValueError(f"Unknown query schedule: {query_schedule}")
 
         self.dataset = PreferenceDataset(max_size=comparison_queue_size)
+        self.json_fragmenter = json_fragmenter
 
     def train(
         self,
@@ -2356,14 +2449,17 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             self.logger.log(
                 f"Collecting {2 * num_pairs} fragments ({num_steps} transitions)",
             )
-            trajectories = self.trajectory_generator.sample(num_steps)
-            # pop the last trajectory (since the video could not be saved correctly)
-            trajectories.pop()
+            if not isinstance(self.fragmenter, JsonFragmenter): 
+                trajectories = self.trajectory_generator.sample(num_steps)
+                # pop the last trajectory (since the video could not be saved correctly)
+                trajectories.pop()
 
-            # This assumes there are no fragments missing initial timesteps
-            # (but allows for fragments missing terminal timesteps).
-            horizons = (len(traj) for traj in trajectories if traj.terminal)
-            self._check_fixed_horizon(horizons)
+                # This assumes there are no fragments missing initial timesteps
+                # (but allows for fragments missing terminal timesteps).
+                horizons = (len(traj) for traj in trajectories if traj.terminal)
+                self._check_fixed_horizon(horizons)
+            else:
+                trajectories = self.fragmenter.load(f'fragments_{self._iteration}.json')
 
             #for the pairwise comparison of HumanGathererAPI we need to create one trajectory pair for every user query
             if isinstance(self.preference_gatherer, HumanGathererAPI):
@@ -2374,6 +2470,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 self.logger.log("Creating fragment pairs")
                 num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_fragments=num_fragments)
+                if self.json_fragmenter is not None:
+                    self.json_fragmenter.save(fragments, f'fragments_{self._iteration}.json')
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
                     fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
@@ -2382,7 +2480,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    preferences = self.preference_gatherer(fragments)
+                    preferences = self.preference_gatherer(fragments, self.fragment_length, num_pairs)
 
             self.dataset.push(fragments, preferences)
             self.logger.log(f"Dataset now contains {len(self.dataset)} comparisons")
@@ -2396,13 +2494,13 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             epoch_multiplier = 1.0
             if i == 0:
                 epoch_multiplier = self.initial_epoch_multiplier
-
-            self.reward_trainer.train(self.dataset, epoch_multiplier=epoch_multiplier)
-            base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
-            assert f"{base_key}/loss" in self.logger.name_to_value
-            assert f"{base_key}/accuracy" in self.logger.name_to_value
-            reward_loss = self.logger.name_to_value[f"{base_key}/loss"]
-            reward_accuracy = self.logger.name_to_value[f"{base_key}/accuracy"]
+            if not isinstance(self.fragmenter, JsonFragmenter):
+                self.reward_trainer.train(self.dataset, epoch_multiplier=epoch_multiplier)
+                base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
+                assert f"{base_key}/loss" in self.logger.name_to_value
+                assert f"{base_key}/accuracy" in self.logger.name_to_value
+                reward_loss = self.logger.name_to_value[f"{base_key}/loss"]
+                reward_accuracy = self.logger.name_to_value[f"{base_key}/accuracy"]
 
             ###################
             # Train the agent #
@@ -2414,8 +2512,9 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if i == self.num_iterations - 1:
                 num_steps += extra_timesteps
             with self.logger.accumulate_means("agent"):
-                self.logger.log(f"Training agent for {num_steps} timesteps")
-                self.trajectory_generator.train(steps=num_steps, tb_log_name=tb_log_name)
+                if not isinstance(self.fragmenter, JsonFragmenter):
+                    self.logger.log(f"Training agent for {num_steps} timesteps")
+                    self.trajectory_generator.train(steps=num_steps, tb_log_name=tb_log_name)
 
             self.logger.dump(self._iteration)
 
