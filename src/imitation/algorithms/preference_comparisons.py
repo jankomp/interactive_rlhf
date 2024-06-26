@@ -70,6 +70,10 @@ from sklearn.manifold import TSNE
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import AgglomerativeClustering
+import numpy as np
+from matplotlib import pyplot as plt
+from scipy.cluster.hierarchy import dendrogram
+
 from scipy.spatial.distance import pdist, squareform
 
 from scipy.spatial.distance import euclidean
@@ -1571,45 +1575,84 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.queue.put(data)
         self.feedback_count += (10 if len(data['group1']) < 10 else len(data['group1'])) + (10 if len(data['group2']) < 10 else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
         return jsonify(self.feedback_count)
-    
-    
-    def convert_to_low_dimensional_data(self, high_dimensional_data, fragment_length, n_trajectory_components, reduce_to):
-        def dtw_distance(t1, t2):
-            # https://pypi.org/project/fastdtw/
-            # FastDTW: Toward accurate dynamic time warping in linear time and space.” Intelligent Data Analysis 
-            # x = np.array(x)
-            # y = np.array(y)
-            t1 = t1.reshape((fragment_length, n_trajectory_components))
-            t2 = t2.reshape((fragment_length, n_trajectory_components))
-            distance, _ = fastdtw(t1, t2, dist=euclidean)
-            return distance
 
-        tsne = TSNE(n_components=reduce_to, perplexity=4, metric=dtw_distance)
-        low_dimensional_data = tsne.fit_transform(high_dimensional_data)
-        return low_dimensional_data
-    
-    def dimensional_reduction(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
-        """Reduce the dimensionality of the fragments. Return id, x, y, video_path of the fragments"""
-        n_components = 2
+    def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
         n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
-        # Convert fragments to fragments_data
         fragments_data = []
         for fragment in fragments:
             fragment_data = np.concatenate([np.array(list(fragment.obs[i]) + list(fragment.acts[i])) for i in range(fragment_length)])
             fragments_data.append(fragment_data)
         fragments_data = np.array(fragments_data)
 
-        low_dimensional_data = self.convert_to_low_dimensional_data(fragments_data, fragment_length, n_trajectory_components, n_components)
+        def dtw_distance(t1, t2):
+            t1 = t1.reshape((fragment_length, n_trajectory_components))
+            t2 = t2.reshape((fragment_length, n_trajectory_components))
+            distance, _ = fastdtw(t1, t2, dist=euclidean)
+            return distance
 
-        fragments_with_id = [{'id': id, 'x': float(x), 'y': float(y), 'video_path': find_video_file(fragment.infos)} for id, (x, y), fragment in zip(range(len(fragments)), low_dimensional_data, fragments)]
+        # Compute the distance matrix using DTW
+        dist_matrix = squareform(pdist(fragments_data, dtw_distance))
 
-        return fragments_with_id
+        # Perform hierarchical clustering
+        clustering = AgglomerativeClustering(affinity='precomputed', linkage='complete', compute_distances=True).fit(dist_matrix)
+
+        plt.title("Hierarchical Clustering Dendrogram")
+        # plot the top three levels of the dendrogram
+        self.plot_dendrogram(clustering, truncate_mode=None, p=3)        
+        plt.xlabel("Number of points in node (or index of point if no parenthesis).")
+        plt.savefig('dendrogram.png')
+
+        # Convert the children_ attribute to a tree structure
+        tree = self.children_to_tree(clustering.children_, fragments)
+
+        return tree
+
+
+    def children_to_tree(self, children, fragments):
+        # Create a node for each fragment
+        nodes = [{"id": i, "video_path": find_video_file(fragment.infos)} for i, fragment in enumerate(fragments)]
+
+        # Create a node for each non-leaf node
+        for i, (child1, child2) in enumerate(children):
+            node = {"id": len(nodes), "children": [nodes[child1], nodes[child2]]}
+            nodes.append(node)
+
+        # The root of the tree is the last node
+        root = nodes[-1]
+
+        return root
+    
+    def plot_dendrogram(self, model, **kwargs):
+        # create the counts of samples under each node
+        counts = np.zeros(model.children_.shape[0])
+        n_samples = len(model.labels_)
+        for i, merge in enumerate(model.children_):
+            current_count = 0
+            for child_idx in merge:
+                if child_idx < n_samples:
+                    current_count += 1  # leaf node
+                else:
+                    current_count += counts[child_idx - n_samples]
+            counts[i] = current_count
+
+        linkage_matrix = np.column_stack(
+            [model.children_, model.distances_, counts]
+        ).astype(float)
+
+        # Plot the corresponding dendrogram
+        dendrogram(linkage_matrix, **kwargs)
+
 
     def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         preferences = []
-        self.fragments_for_frontend = self.dimensional_reduction(fragments, fragment_length=fragment_length)
+        self.fragments_for_frontend = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
+        #save fragments_for_frontend to a json_file
+        print('Saving fragments_for_frontend to a json file')
+        with open('fragments_for_frontend.json', 'w') as f:
+            json.dump(self.fragments_for_frontend, f)
+        print('saved to json')
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
         self.feedback_count = 0
@@ -2480,7 +2523,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    preferences = self.preference_gatherer(fragments, self.fragment_length, num_pairs)
+                    fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
 
             self.dataset.push(fragments, preferences)
             self.logger.log(f"Dataset now contains {len(self.dataset)} comparisons")
