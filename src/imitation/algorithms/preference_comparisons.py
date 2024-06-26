@@ -1594,7 +1594,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         dist_matrix = squareform(pdist(fragments_data, dtw_distance))
 
         # Perform hierarchical clustering
-        clustering = AgglomerativeClustering(affinity='precomputed', linkage='complete', compute_distances=True).fit(dist_matrix)
+        clustering = AgglomerativeClustering(metric='precomputed', linkage='complete', compute_distances=True).fit(dist_matrix)
 
         plt.title("Hierarchical Clustering Dendrogram")
         # plot the top three levels of the dendrogram
@@ -1603,25 +1603,57 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         plt.savefig('dendrogram.png')
 
         # Convert the children_ attribute to a tree structure
-        tree = self.children_to_tree(clustering.children_, fragments)
+        tree = self.children_to_tree(clustering.children_, clustering.distances_, fragments, 4)
 
         return tree
 
+    def children_to_tree(self, children, distances, fragments, n_levels):
+        nodes = [{"id": i, "video_path": find_video_file(fragment.infos), "level": 0} for i, fragment in enumerate(fragments)]
 
-    def children_to_tree(self, children, fragments):
-        # Create a node for each fragment
-        nodes = [{"id": i, "video_path": find_video_file(fragment.infos)} for i, fragment in enumerate(fragments)]
+        print(f'Number of children: {len(children)}')
+        print(f'Children: {children}')
+        print(f'Number of distances: {len(distances)}')
+        print(f'Distances: {distances}')
 
-        # Create a node for each non-leaf node
-        for i, (child1, child2) in enumerate(children):
-            node = {"id": len(nodes), "children": [nodes[child1], nodes[child2]]}
+        for i, (left_child, right_child) in enumerate(children):
+            distance = distances[i]
+            level = next((l for l, level_distance in enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1) if distance < level_distance), n_levels)
+            node = {"id": len(nodes), "children": [nodes[left_child], nodes[right_child]], "level": level}
             nodes.append(node)
 
-        # The root of the tree is the last node
         root = nodes[-1]
+        root = self.convert_to_non_binary_tree(nodes, children)
 
         return root
-    
+
+    def convert_to_non_binary_tree(self, nodes, children):
+        for i in range(len(nodes) - 1, -1, -1):
+            node = nodes[i]
+
+            if 'children' not in node:
+                continue
+
+            #TODO: is there a better way to do this than looping through all nodes every time with O(n^2)?
+            parent = None
+            for potential_parent in nodes:
+                if 'children' in potential_parent and node in potential_parent['children']:
+                    parent = potential_parent
+                    break
+
+            if parent is not None:
+                print(f'Child level: {node["level"]}')
+                print(f'Parent level: {parent["level"]}')  # Print parent level
+
+                if parent["level"] == node["level"]:
+                    parent["children"].extend(node["children"])
+                    parent["children"].remove(node)
+                    print(f'Removing node {node["id"]}')
+                    nodes.remove(node)
+
+        root = nodes[-1]
+        return root
+
+
     def plot_dendrogram(self, model, **kwargs):
         # create the counts of samples under each node
         counts = np.zeros(model.children_.shape[0])
