@@ -1610,11 +1610,6 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     def children_to_tree(self, children, distances, fragments, n_levels):
         nodes = [{"id": i, "video_path": find_video_file(fragment.infos), "level": 0} for i, fragment in enumerate(fragments)]
 
-        print(f'Number of children: {len(children)}')
-        print(f'Children: {children}')
-        print(f'Number of distances: {len(distances)}')
-        print(f'Distances: {distances}')
-
         for i, (left_child, right_child) in enumerate(children):
             distance = distances[i]
             level = next((l for l, level_distance in enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1) if distance < level_distance), n_levels)
@@ -1622,17 +1617,15 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             nodes.append(node)
 
         root = nodes[-1]
-        root = self.convert_to_non_binary_tree(nodes, children)
+        root = self.convert_to_non_binary_tree(nodes)
 
         return root
 
-    def convert_to_non_binary_tree(self, nodes, children):
-        for i in range(len(nodes) - 1, -1, -1):
-            node = nodes[i]
+    def convert_to_non_binary_tree(self, nodes):        
+        # Sort nodes by level in descending order
+        nodes.sort(key=lambda node: -node["level"])
 
-            if 'children' not in node:
-                continue
-
+        for node in nodes:
             #TODO: is there a better way to do this than looping through all nodes every time with O(n^2)?
             parent = None
             for potential_parent in nodes:
@@ -1641,16 +1634,34 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                     break
 
             if parent is not None:
-                print(f'Child level: {node["level"]}')
-                print(f'Parent level: {parent["level"]}')  # Print parent level
 
                 if parent["level"] == node["level"]:
-                    parent["children"].extend(node["children"])
+                    # More than 1 node in the same level
+                    if 'children' in node:
+                        parent["children"].extend(node["children"])
                     parent["children"].remove(node)
                     print(f'Removing node {node["id"]}')
                     nodes.remove(node)
 
-        root = nodes[-1]
+                elif parent["level"] - 1 > node["level"]:
+                    # The parent is more than one level above the node
+                    print(f'Parent level - 1: {parent["level"] - 1}')
+                    current_level = node["level"]
+                    while parent["level"] - 1 > current_level:
+                        current_level += 1
+                        # Insert a new node at the missing level
+                        new_node = {"id": len(nodes), "children": [node], "level": current_level}
+                        # Replace the reference to node in parent's children with the reference to the new node
+                        parent["children"] = [new_node if child is node else child for child in parent["children"]]
+                        nodes.append(new_node)
+                        node = new_node
+                        print(f'Inserting node {new_node["id"]} at level {current_level}')
+
+        
+        nodes.sort(key=lambda node: -node["level"])
+        root = nodes[0]
+        print(f'Root level: {root["level"]}')
+
         return root
 
 
