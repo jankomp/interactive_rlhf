@@ -1608,12 +1608,12 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return tree
 
     def children_to_tree(self, children, distances, fragments, n_levels):
-        nodes = [{"id": i, "video_path": find_video_file(fragment.infos), "level": 0} for i, fragment in enumerate(fragments)]
+        nodes = [{"id": i, "level": 0, "video_path": find_video_file(fragment.infos)} for i, fragment in enumerate(fragments)]
 
         for i, (left_child, right_child) in enumerate(children):
             distance = distances[i]
             level = next((l for l, level_distance in enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1) if distance < level_distance), n_levels)
-            node = {"id": len(nodes), "children": [nodes[left_child], nodes[right_child]], "level": level}
+            node = {"id": len(nodes), "level": level, "children": [nodes[left_child], nodes[right_child]]}
             nodes.append(node)
 
         root = nodes[-1]
@@ -1622,10 +1622,10 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return root
 
     def convert_to_non_binary_tree(self, nodes):        
-        # Sort nodes by level in descending order
-        nodes.sort(key=lambda node: -node["level"])
-
-        for node in nodes:
+        # Sort nodes by level in ascending order
+        nodes.sort(key=lambda node: node["level"])
+        nodes_copy = nodes.copy()
+        for node in nodes_copy:
             #TODO: is there a better way to do this than looping through all nodes every time with O(n^2)?
             parent = None
             for potential_parent in nodes:
@@ -1634,18 +1634,12 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                     break
 
             if parent is not None:
-
                 if parent["level"] == node["level"]:
-                    # More than 1 node in the same level
-                    if 'children' in node:
-                        parent["children"].extend(node["children"])
-                    parent["children"].remove(node)
-                    print(f'Removing node {node["id"]}')
+                    index = parent["children"].index(node)
+                    # Replace the current node with its children while maintaining the order of the other children
+                    parent["children"] = parent["children"][:index] + node["children"] + parent["children"][index+1:]
                     nodes.remove(node)
-
-                elif parent["level"] - 1 > node["level"]:
-                    # The parent is more than one level above the node
-                    print(f'Parent level - 1: {parent["level"] - 1}')
+                else:
                     current_level = node["level"]
                     while parent["level"] - 1 > current_level:
                         current_level += 1
@@ -1655,12 +1649,10 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                         parent["children"] = [new_node if child is node else child for child in parent["children"]]
                         nodes.append(new_node)
                         node = new_node
-                        print(f'Inserting node {new_node["id"]} at level {current_level}')
 
         
-        nodes.sort(key=lambda node: -node["level"])
-        root = nodes[0]
-        print(f'Root level: {root["level"]}')
+        nodes.sort(key=lambda node: node["level"])
+        root = nodes[-1]
 
         return root
 
