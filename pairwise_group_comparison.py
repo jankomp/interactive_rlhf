@@ -53,6 +53,7 @@ reward_trainer = preference_comparisons.EnsembleTrainer(
     regularizer_factory = regularizer_factory,
 )
 
+#fragmenter = preference_comparisons.JsonFragmenter(directory='fragmenter_data')
 fragmenter = preference_comparisons.AbsoluteUncertaintyFragmenter(
         preference_model,
         2.0,
@@ -60,7 +61,7 @@ fragmenter = preference_comparisons.AbsoluteUncertaintyFragmenter(
 )
 
 #gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(total_feedbacks=total_comparisons, rng=rng, augment_to_group_size=1)
+gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(total_feedbacks=total_comparisons, rng=rng, augment_to_group_size=1, preference_model=preference_model,)
 
 # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
 # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,

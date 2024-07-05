@@ -163,3 +163,4 @@ dmypy.json
 
 # tensorboard logs
 compare_feedback_types/
+fragmenter_data/

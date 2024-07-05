@@ -12,6 +12,7 @@ import abc
 import math
 import pickle
 import re
+import itertools
 from collections import defaultdict
 from typing import (
     Any,
@@ -1534,6 +1535,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
         augment_to_group_size = 10,
+        preference_model: Optional[PreferenceModel] = None,
     ) -> None:
         super().__init__(rng=rng, custom_logger=custom_logger)
         self.augment_to_group_size = augment_to_group_size
@@ -1541,14 +1543,19 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         CORS(self.app)
         self.feedback_count = 0
         self.total_feedbacks = total_feedbacks
+        self.preference_model = preference_model
         self.current_fragments_hash = None
+        self.active_learning_suggestions = []
         self.fragments_with_id = []
         self.fragments_for_frontend = []
+        self.given_preferences_for_frontend = []
         self.queue = Queue() 
         self.app.route('/stream')(self.stream)
         self.app.route('/videos/<path:filename>')(self.serve_video)
         self.app.route('/total_feedbacks')(self.get_total_feedbacks)
         self.app.route('/fragments')(self.get_fragments)
+        self.app.route('/suggestions')(self.get_suggestions)
+        self.app.route('/given_preferences')(self.get_given_preferences)
         self.app.route('/preference', methods=['POST'])(self.post_preference_pairs)
         print('Starting server in a new thread')
         Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
@@ -1569,6 +1576,12 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     
     def get_fragments(self):
         return jsonify(self.fragments_for_frontend)
+    
+    def get_suggestions(self):
+        return jsonify(self.active_learning_suggestions)
+    
+    def get_given_preferences(self):
+        return jsonify(self.given_preferences_for_frontend)
     
     def post_preference_pairs(self):
         data = request.json
@@ -1595,12 +1608,6 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         # Perform hierarchical clustering
         clustering = AgglomerativeClustering(metric='precomputed', linkage='complete', compute_distances=True).fit(dist_matrix)
-
-        plt.title("Hierarchical Clustering Dendrogram")
-        # plot the top three levels of the dendrogram
-        self.plot_dendrogram(clustering, truncate_mode=None, p=3)        
-        plt.xlabel("Number of points in node (or index of point if no parenthesis).")
-        plt.savefig('dendrogram.png')
 
         # Convert the children_ attribute to a tree structure
         tree = self.children_to_tree(clustering.children_, clustering.distances_, fragments, 4)
@@ -1656,38 +1663,40 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         return root
 
+    def get_active_learning_suggestions(self, fragments: Sequence[TrajectoryWithRew], num_pairs: int) -> Sequence[TrajectoryWithRewPair]:
+        # Generate all possible pairs with their ids
+        fragment_pairs = list(itertools.combinations(enumerate(fragments), 2))
 
-    def plot_dendrogram(self, model, **kwargs):
-        # create the counts of samples under each node
-        counts = np.zeros(model.children_.shape[0])
-        n_samples = len(model.labels_)
-        for i, merge in enumerate(model.children_):
-            current_count = 0
-            for child_idx in merge:
-                if child_idx < n_samples:
-                    current_count += 1  # leaf node
-                else:
-                    current_count += counts[child_idx - n_samples]
-            counts[i] = current_count
+        id_variance_pairs = []
+        for fragment_pair in fragment_pairs:
+            (id1, frag1), (id2, frag2) = fragment_pair
+            trans1 = rollout.flatten_trajectories([frag1])
+            trans2 = rollout.flatten_trajectories([frag2])
+            with th.no_grad():
+                rews1 = self.preference_model.rewards(trans1)
+                rews2 = self.preference_model.rewards(trans2)
+            # always calculate the uncertainty on logit
+            returns1, returns2 = rews1.sum(0), rews2.sum(0)
+            var_estimate = (returns1 - returns2).var().item()
+            id_variance_pairs.append({"id1": id1, "id2": id2, "var": var_estimate})
 
-        linkage_matrix = np.column_stack(
-            [model.children_, model.distances_, counts]
-        ).astype(float)
-
-        # Plot the corresponding dendrogram
-        dendrogram(linkage_matrix, **kwargs)
+        # Sort the pairs by variance in descending order
+        id_variance_pairs.sort(key=lambda x: x["var"], reverse=True)
+         # Return the first num_pairs elements
+        #return id_variance_pairs[:num_pairs]
+        return id_variance_pairs
 
 
     def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         preferences = []
+        self.given_preferences_for_frontend = []
+
+        if self.preference_model is not None and self.preference_model.ensemble_model is not None:
+            self.active_learning_suggestions = self.get_active_learning_suggestions(fragments, num_pairs)
+
         self.fragments_for_frontend = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
-        #save fragments_for_frontend to a json_file
-        print('Saving fragments_for_frontend to a json file')
-        with open('fragments_for_frontend.json', 'w') as f:
-            json.dump(self.fragments_for_frontend, f)
-        print('saved to json')
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
         self.feedback_count = 0
@@ -1699,7 +1708,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
             # we create one preference for each possible pair of fragments across the two groups with the value of preference
             preference = 1.0 if feedback['preference'] == 'ArrowLeft' else 0.0 if feedback['preference'] == 'ArrowRight' else 0.5 if feedback['preference'] == 'ArrowUp' else None
-            if preference is not None:
+            if preference is not None and len(feedback['group1']) > 0 and len(feedback['group2']) > 0:
                 group1 = feedback['group1']
                 group2 = feedback['group2']
 
@@ -1715,6 +1724,11 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                         fragment_pair = (fragments[i], fragments[j])
                         fragment_pairs.append(fragment_pair)
                         preferences.append(preference)
+                        self.given_preferences_for_frontend.append({
+                            'id1': i,
+                            'id2': j,
+                            'preference': preference
+                        })
             print(f'Feedback count: {self.feedback_count}/{num_pairs}')
             print(f'Preferences: {len(preferences)}')
             print(f'Fragment pairs: {len(fragment_pairs)}')
