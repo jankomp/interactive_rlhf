@@ -346,7 +346,7 @@ class AgentTrainer(TrajectoryGenerator):
     def logger(self, value: imit_logger.HierarchicalLogger) -> None:
         self._logger = value
         #commented, because we want to save tensorboard logs
-        #self.algorithm.set_logger(self.logger)
+        self.algorithm.set_logger(self.logger)
 
 
 def _get_trajectories(
@@ -1586,8 +1586,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     def post_preference_pairs(self):
         data = request.json
         self.queue.put(data)
-        self.feedback_count += (10 if len(data['group1']) < 10 else len(data['group1'])) + (10 if len(data['group2']) < 10 else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
-        return jsonify(self.feedback_count)
+        self.feedback_count += (self.augment_to_group_size if len(data['group1']) < self.augment_to_group_size else len(data['group1'])) + (self.augment_to_group_size if len(data['group2']) < self.augment_to_group_size else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
+        return jsonify({'feedback_count:': self.feedback_count})
 
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
         n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
@@ -2542,7 +2542,10 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 f"Collecting {2 * num_pairs} fragments ({num_steps} transitions)",
             )
             if not isinstance(self.fragmenter, JsonFragmenter): 
+                start_time = time.time()
                 trajectories = self.trajectory_generator.sample(num_steps)
+                end_time = time.time()
+                self.logger.log(f"Trajectory generation took {end_time - start_time} seconds")
                 # pop the last trajectory (since the video could not be saved correctly)
                 trajectories.pop()
 
@@ -2566,7 +2569,10 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                     self.json_fragmenter.save(fragments, f'fragments_{self._iteration}.json')
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
+                    start_time = time.time()
                     fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
+                    end_time = time.time()
+                    self.logger.log(f"Preference gathering took {end_time - start_time} seconds")
             else:            
                 self.logger.log("Creating fragment pairs")
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
@@ -2587,7 +2593,10 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if i == 0:
                 epoch_multiplier = self.initial_epoch_multiplier
             if not isinstance(self.fragmenter, JsonFragmenter):
+                start_time = time.time()
                 self.reward_trainer.train(self.dataset, epoch_multiplier=epoch_multiplier)
+                end_time = time.time()
+                self.logger.log(f"Reward model training took {end_time - start_time} seconds")
                 base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
                 assert f"{base_key}/loss" in self.logger.name_to_value
                 assert f"{base_key}/accuracy" in self.logger.name_to_value
@@ -2606,7 +2615,10 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             with self.logger.accumulate_means("agent"):
                 if not isinstance(self.fragmenter, JsonFragmenter):
                     self.logger.log(f"Training agent for {num_steps} timesteps")
-                    self.trajectory_generator.train(steps=num_steps, tb_log_name=tb_log_name)
+                    start_time = time.time()
+                    self.trajectory_generator.train(steps=num_steps)#, tb_log_name=tb_log_name)
+                    end_time = time.time()
+                    self.logger.log(f"Agent training took {end_time - start_time} seconds")
 
             self.logger.dump(self._iteration)
 
