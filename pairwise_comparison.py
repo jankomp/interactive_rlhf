@@ -6,21 +6,31 @@ from imitation.util.util import make_vec_env
 from imitation.policies.base import FeedForward32Policy, NormalizeFeaturesExtractor
 from imitation.regularization.regularizers import LpRegularizer
 from imitation.regularization.updaters import IntervalParamScaler
+from imitation.util.vec_video_recorder import VecVideoRecorder
 import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
 import torch.optim as optim
 
 # make sure that max_episode_steps is divisible by fragment_length
-total_timesteps = 20_000
-total_comparisons = 100
+total_timesteps = 100_000
+total_comparisons = 500
 max_episode_steps = 1000
 fragment_length = 25
-gravity = -3
+gravity = -9.81
 
 rng = np.random.default_rng(0)
 
-venv = make_vec_env("Hopper-v4", rng=rng, render_mode='rgb_array', n_envs=1, max_episode_steps=max_episode_steps, env_make_kwargs={'terminate_when_unhealthy': False}, gravity=gravity)
+venv = make_vec_env(
+    "Hopper-v4",
+    rng=rng,
+    render_mode='rgb_array',
+    n_envs=1,
+    max_episode_steps=max_episode_steps,
+    env_make_kwargs={'terminate_when_unhealthy': False},
+    gravity=gravity,
+    post_wrappers=[VecVideoRecorder],
+)
 
 reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(5)]
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)

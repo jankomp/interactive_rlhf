@@ -164,3 +164,8 @@ dmypy.json
 # tensorboard logs
 compare_feedback_types/
 fragmenter_data/
+
+# files for debugging
+active_learning_suggestions.json
+clustered_fragments.json
+dendrogram.png

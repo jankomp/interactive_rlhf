@@ -23,7 +23,9 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.utils import check_for_correct_spaces
 from stable_baselines3.common.vec_env import VecEnv
+from stable_baselines3.common.vec_env import VecEnvWrapper
 
+from imitation.util.video_wrapper import VideoWrapper
 from imitation.data import types
 
 
@@ -409,6 +411,11 @@ def generate_trajectories(
         may be collected to avoid biasing process towards short episodes; the user
         should truncate if required.
     """
+
+    video_recorders = find_video_recorders(venv)
+    for video_recorder in video_recorders:
+        video_recorder.activate()
+
     get_actions = policy_to_callable(policy, venv, deterministic_policy)
 
     # Collect rollout tuples.
@@ -503,7 +510,20 @@ def generate_trajectories(
         real_rew = trajectory.rews.shape
         assert real_rew == exp_rew, f"expected shape {exp_rew}, got {real_rew}"
 
+    for video_recorder in video_recorders:
+        video_recorder.deactivate()
+
     return trajectories
+
+def find_video_recorders(venv):
+    video_recorders = []
+    for env in venv.envs:
+        while hasattr(env, 'env'):
+            if isinstance(env, VideoWrapper):
+                video_recorders.append(env)
+                break
+            env = env.env
+    return video_recorders
 
 
 def rollout_stats(
