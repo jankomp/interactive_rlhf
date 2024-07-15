@@ -1285,6 +1285,153 @@ class SyntheticGatherer(PreferenceGatherer):
         )
         return np.array(rews1, dtype=np.float32), np.array(rews2, dtype=np.float32)
 
+
+USER_TYPE_LIST = ["greedy", "noisy", "random", "boltzmann"]
+class SyntheticHumanUser(PreferenceGatherer):
+    """Computes synthetic preferences using ground-truth environment rewards."""
+
+    def __init__(
+        self,
+        user_type=["greedy", "noisy", "random", "boltzmann", "bernoulli"],
+        temperature: float = 1,
+        discount_factor: float = 1,
+        sample: bool = True,
+        rng: Optional[np.random.Generator] = None,
+        threshold: float = 50,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+    ) -> None:
+        """Initialize the synthetic preference gatherer.
+
+        Args:
+            temperature: the preferences are sampled from a softmax, this is
+                the temperature used for sampling. temperature=0 leads to deterministic
+                results (for equal rewards, 0.5 will be returned).
+            discount_factor: discount factor that is used to compute
+                how good a fragment is. Default is to use undiscounted
+                sums of rewards (as in the DRLHP paper).
+            sample: if True (default), the preferences are 0 or 1, sampled from
+                a Bernoulli distribution (or 0.5 in the case of ties with zero
+                temperature). If False, then the underlying Bernoulli probabilities
+                are returned instead.
+            rng: random number generator, only used if
+                ``temperature > 0`` and ``sample=True``
+            threshold: preferences are sampled from a softmax of returns.
+                To avoid overflows, we clip differences in returns that are
+                above this threshold (after multiplying with temperature).
+                This threshold is therefore in logspace. The default value
+                of 50 means that probabilities below 2e-22 are rounded up to 2e-22.
+            custom_logger: Where to log to; if None (default), creates a new logger.
+
+        Raises:
+            ValueError: if `sample` is true and no random state is provided.
+        """
+        super().__init__(custom_logger=custom_logger)
+        self.temperature = temperature
+        self.discount_factor = discount_factor
+        self.sample = sample
+        self.rng = rng
+        self.threshold = threshold
+        self.user_type = user_type
+        assert self.user_type_list in USER_TYPE_LIST, f"user type: {user_type} not suported"
+        if self.sample and self.rng is None:
+            raise ValueError("If `sample` is True, then `rng` must be provided.")
+    def _boltzmann_rational_user(self,utilities) -> np.ndarray:
+            """
+            Computes boltzmann rational user
+            utilities: utilities values for different options
+            """
+
+        # Compute the numerator of the Boltzmann distribution for each action
+            numerator = np.exp(utilities * self.temperature)
+            
+            # Compute the denominator by summing the numerators
+            denominator = np.sum(numerator)
+            
+            # Compute the probabilities for each action
+            probabilities = numerator / denominator
+            
+            return probabilities
+    def _greedy_user(self,utilities)-> np.ndarray:
+        if utilities[0] == utilities[1]:
+            return 0.5
+        else:
+            return int(utilities[0] > utilities[1])
+
+    def _normal_user(self,utilities):
+        assert len(utilities) >=2, "need various options"
+        normal_ut = []
+        for ut in utilities:
+            _rn = np.random.normal(ut, std =1)
+            normal_ut.append(_rn)
+        return self._greedy_user(normal_ut)
+    def _random_user(self, utilities=None):
+        """
+        Randomly sample either 0, 1, or 0.5 for a given number of options.
+
+        Parameters:
+        num_options (int): The number of options to sample for.
+
+        Returns:
+        np.ndarray: An array of randomly sampled values (0, 1, or 0.5) for each option.
+        """
+        possible_values = [0, 1, 0.5]
+        sampled_values = np.random.choice(possible_values, size=3)
+        return sampled_values
+    def _bernoulli(self, utilities):
+        returns1= utilities[0]
+        returns2= utilities[1]
+        if self.temperature == 0:
+            return (np.sign(returns1 - returns2) + 1) / 2
+
+        returns1 /= self.temperature
+        returns2 /= self.temperature
+
+        # clip the returns to avoid overflows in the softmax below
+        returns_diff = np.clip(returns2 - returns1, -self.threshold, self.threshold)
+        # Instead of computing exp(rews1) / (exp(rews1) + exp(rews2)) directly,
+        # we divide enumerator and denominator by exp(rews1) to prevent overflows:
+        model_probs = 1 / (1 + np.exp(returns_diff))
+        # Compute the mean binary entropy. This metric helps estimate
+        # how good we can expect the performance of the learned reward
+        # model to be at predicting preferences.
+        entropy = -(
+            special.xlogy(model_probs, model_probs)
+            + special.xlogy(1 - model_probs, 1 - model_probs)
+        ).mean()
+        self.logger.record("entropy", entropy)
+
+        if self.sample:
+            if self.rng is  None:
+                self.rng = np.random.default_rng()
+            return self.rng.binomial(n=1, p=model_probs).astype(np.float32)
+        return model_probs
+
+    def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
+        """Computes probability fragment 1 is preferred over fragment 2."""
+        returns1, returns2 = self._reward_sums(fragment_pairs)
+        utilities= [returns1, returns2]
+        if self.user_type == "greedy":
+            return self._greedy_user(utilities)
+        elif self.user_type=="random":
+            return self._random_user(utilities)
+        elif self.user_type=="boltzmann":
+            return self._boltzmann_rational_user(utilities)
+        elif self.user_type=="bernoulli":
+            return self._bernoulli(utilities)
+        # "greedy", "noisy", "random", "boltzmann", "bernoulli"
+        
+    def _reward_sums(self, fragment_pairs) -> Tuple[np.ndarray, np.ndarray]:
+        rews1, rews2 = zip(
+            *[
+                (
+                    rollout.discounted_sum(f1.rews, self.discount_factor),
+                    rollout.discounted_sum(f2.rews, self.discount_factor),
+                )
+                for f1, f2 in fragment_pairs
+            ],
+        )
+        return np.array(rews1, dtype=np.float32), np.array(rews2, dtype=np.float32)
+
 class HumanGathererAPI(PreferenceGatherer):
     """Collects human feedback by displaying videos and capturing keyboard inputs."""
 
@@ -1372,11 +1519,12 @@ class HumanGathererAPI(PreferenceGatherer):
 
         return fragment_pairs, np.array(preferences, dtype=np.float32)
     
-class SyntheticGathererForGroupComparisons(PreferenceGatherer):
+class SyntheticGathererForGroupComparisons(PreferenceGatherer, SyntheticHumanUser):
     """Collects synthetic feedback by displaying the fragments in a dimensionally reduced scatterplot and receiving preferences over groups."""
 
     def __init__(
         self,
+        user_type=["greedy", "noisy", "random", "boltzmann", "bernoulli"],
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
         augment_to_group_size = 10,
@@ -1483,6 +1631,18 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
                 preference = 0.0
             else:
                 preference = 0.5
+
+            ## different user feedbacks based on type of users>
+            utilities= [true_reward_group1, true_reward_group2]
+            if self.user_type == "greedy":
+                preference= self._greedy_user(utilities)
+            elif self.user_type=="random":
+                preference= self._random_user(utilities)
+            elif self.user_type=="boltzmann":
+                preference] self._boltzmann_rational_user(utilities)
+            elif self.user_type=="bernoulli":
+                preference= self._bernoulli(utilities)
+
 
             group_preferences.append({
                 'group1': group1,
