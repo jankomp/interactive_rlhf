@@ -109,10 +109,10 @@ class VideoWrapper(gym.Wrapper):
         self,
         action: WrapperActType,
     ) -> Tuple[WrapperObsType, SupportsFloat, bool, bool, Dict[str, Any]]:
-        obs, reward, done, _, info = super().step(action)
+        obs, reward, done, truncated, info = super().step(action)
 
         if not self.active:
-            return obs, reward, done, _, info
+            return obs, reward, done, truncated, info
 
         if self.video_recorder is None:
             self._reset_video_recorder()
@@ -126,16 +126,16 @@ class VideoWrapper(gym.Wrapper):
             self.step_id += 1
             self.episode_length += 1
 
-            if (self.recorded_frames == self.video_length) or done:
+            if (self.recorded_frames == self.video_length) or done or truncated:
                 self.fragment_paths.append(self.video_recorder.path)
                 self.close_video_recorder()
                 if self.timeline:
-                    if done:
+                    if done or truncated:
                         try:
                             self.add_timelines()
                         except Exception as e:
                             print("Error caught adding timelines: ", e)
-        return obs, reward, done, _, info
+        return obs, reward, done, truncated, info
 
     def close_video_recorder(self):
         if self.video_recorder is not None:
