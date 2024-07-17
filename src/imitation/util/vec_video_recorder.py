@@ -1,20 +1,26 @@
 import os
-import gymnasium as gym
+
 import imageio
 import numpy as np
 
 from gymnasium.wrappers.monitoring import video_recorder
 
+from stable_baselines3.common.logger import Logger
+from stable_baselines3.common.vec_env.base_vec_env import VecEnvWrapper
+from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env.subproc_vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env.vec_frame_stack import VecFrameStack
+from stable_baselines3.common.vec_env.vec_normalize import VecNormalize
 
 # from stable_baselines.common.vec_env.vec_video_recorder
 # https://stable-baselines.readthedocs.io/en/master/_modules/stable_baselines/common/vec_env/vec_video_recorder.html
 
-class VecVideoRecorder(gym.Wrapper):
+class VecVideoRecorder(VecEnvWrapper):
     """
-    Wraps a Env or EnvWrapper object to record rendered image as mp4 video.
+    Wraps a VecEnv or VecEnvWrapper object to record rendered image as mp4 video.
     It requires ffmpeg or avconv to be installed on the machine.
 
-    :param venv: (Env or EnvWrapper)
+    :param venv: (VecEnv or VecEnvWrapper)
     :param video_folder: (str) Where to save videos
     :param record_video_trigger: (func) Function that defines when to start recording.
                                         The function takes the current number of step,
@@ -26,9 +32,23 @@ class VecVideoRecorder(gym.Wrapper):
     def __init__(self, venv, video_folder, record_video_trigger,
                  video_length=200, name_prefix='rl-video', log_folder='logs', timeline=False):
 
-        super(VecVideoRecorder, self).__init__(venv)
+        VecEnvWrapper.__init__(self, venv)
 
         self.env = venv
+        # Temp variable to retrieve metadata
+        temp_env = venv
+
+        # Unwrap to retrieve metadata dict
+        # that will be used by gym recorder
+        while isinstance(temp_env, VecNormalize) or isinstance(temp_env, VecFrameStack):
+            temp_env = temp_env.venv
+
+        if isinstance(temp_env, DummyVecEnv) or isinstance(temp_env, SubprocVecEnv):
+            metadata = temp_env.get_attr('metadata')[0]
+        else:
+            metadata = temp_env.metadata
+
+        self.env.metadata = metadata
 
         self.record_video_trigger = record_video_trigger
         self.video_recorder = None
@@ -47,20 +67,11 @@ class VecVideoRecorder(gym.Wrapper):
         self.episode_length = 0
         self.fragment_paths = []
 
+        self.logger = Logger(folder=log_folder, output_formats=['.txt'])
         self.timeline = timeline
-        self.active = False
 
-    def deactivate(self):
-        self.active = False
-
-    def activate(self):
-        self.active = True
-
-    def reset(self, seed):
-        obs = self.venv.reset(seed)
-        if not self.active:
-            return obs
-        
+    def reset(self):
+        obs = self.venv.reset()
         self.episode_length = 0
         self.fragment_paths = []
         self.start_video_recorder()
@@ -73,7 +84,7 @@ class VecVideoRecorder(gym.Wrapper):
         video_name = '{}-step-{}-to-step-{}'.format(self.name_prefix, self.step_id,
                                                     self.step_id + self.video_length)
         base_path = os.path.join(self.video_folder, video_name)
-        self.video_recorder = video_recorder.VecVideoRecorder(
+        self.video_recorder = video_recorder.VideoRecorder(
                 env=self.env,
                 base_path=base_path,
                 metadata={'step_id': self.step_id},
@@ -88,9 +99,6 @@ class VecVideoRecorder(gym.Wrapper):
 
     def step_wait(self):
         obs, rews, dones, infos = self.venv.step_wait()
-
-        if not self.active:
-            return obs, rews, dones, infos
 
         self.step_id += 1
         self.episode_length += 1
@@ -126,10 +134,7 @@ class VecVideoRecorder(gym.Wrapper):
         self.recorded_frames = 0
 
     def close(self):
-        if not self.active:
-            return self.venv.close()
-        
-        super(VecVideoRecorder, self).close()
+        VecEnvWrapper.close(self)
         self.close_video_recorder()
 
 
