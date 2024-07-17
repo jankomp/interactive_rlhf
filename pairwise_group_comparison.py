@@ -124,6 +124,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
     #name_prefix='rl-video',
     #timeline=True,
     custom_logger=hierarchical_logger,
+    fragment_length=fragment_length,
 )
 
 

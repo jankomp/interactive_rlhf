@@ -69,6 +69,7 @@ class TrajectoryAccumulator:
     def __init__(self):
         """Initialise the trajectory accumulator."""
         self.partial_trajectories = collections.defaultdict(list)
+        self.step_count = 0
 
     def add_step(
         self,
@@ -88,7 +89,12 @@ class TrajectoryAccumulator:
                 with multiple partial trajectories.
         """
         self.partial_trajectories[key].append(step_dict)
+        self.step_count += 1
 
+    def stop_accumulation(self, min_steps: int) -> bool:
+        """Check if the step_count has reached the desired number of steps."""
+        return self.step_count > min_steps
+    
     def finish_trajectory(
         self,
         key: Hashable,
@@ -179,7 +185,7 @@ class TrajectoryAccumulator:
                 ),
                 env_idx,
             )
-            if done:
+            if done or self.stop_accumulation(self.step_count):
                 # finish env_idx-th trajectory
                 new_traj = self.finish_trajectory(env_idx, terminal=True)
                 trajs.append(new_traj)
@@ -187,7 +193,6 @@ class TrajectoryAccumulator:
                 # observation following reset() of the ith VecEnv.
                 self.add_step(dict(obs=ob), env_idx)
         return trajs
-
 
 GenTrajTerminationFn = Callable[[Sequence[types.TrajectoryWithRew]], bool]
 
@@ -384,7 +389,7 @@ def policy_to_callable(
 def generate_trajectories(
     policy: AnyPolicy,
     venv: VecEnv,
-    sample_until: GenTrajTerminationFn,
+    num_steps: int,
     rng: np.random.Generator,
     *,
     deterministic_policy: bool = False,
@@ -445,10 +450,9 @@ def generate_trajectories(
     # are complete.
     #
     # To start with, all environments are active.
-    active = np.ones(venv.num_envs, dtype=bool)
     state = None
     dones = np.zeros(venv.num_envs, dtype=bool)
-    while np.any(active):
+    while not trajectories_accum.stop_accumulation(num_steps):
         # policy gets unwrapped observations (eg as dict, not dictobs)
         acts, state = get_actions(obs, state, dones)
         obs, rews, dones, infos = venv.step(acts)
@@ -457,12 +461,6 @@ def generate_trajectories(
             (np.ndarray, dict),
         ), "Tuple observations are not supported."
         wrapped_obs = types.maybe_wrap_in_dictobs(obs)
-
-        # If an environment is inactive, i.e. the episode completed for that
-        # environment after `sample_until(trajectories)` was true, then we do
-        # *not* want to add any subsequent trajectories from it. We avoid this
-        # by just making it never done.
-        dones &= active
 
         new_trajs = trajectories_accum.add_steps_and_auto_finish(
             acts,
@@ -473,11 +471,8 @@ def generate_trajectories(
         )
         trajectories.extend(new_trajs)
 
-        if sample_until(trajectories):
-            # Termination condition has been reached. Mark as inactive any
-            # environments where a trajectory was completed this timestep.
-            active &= ~dones
-
+    print("we are done?", num_steps)
+    print("steps of all trajectories", sum(len(t.obs) - 1 for t in trajectories))
     # Note that we just drop partial trajectories. This is not ideal for some
     # algos; e.g. BC can probably benefit from partial trajectories, too.
 

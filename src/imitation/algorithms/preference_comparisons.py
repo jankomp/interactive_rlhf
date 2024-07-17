@@ -168,6 +168,7 @@ class AgentTrainer(TrajectoryGenerator):
         switch_prob: float = 0.5,
         random_prob: float = 0.5,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        fragment_length: int = 25,
     ) -> None:
         """Initialize the agent trainer.
 
@@ -235,6 +236,8 @@ class AgentTrainer(TrajectoryGenerator):
             rng=self.rng,
         )
 
+        self.fragment_length = fragment_length
+
 
     def train(self, steps: int, **kwargs) -> None:
         """Train the agent using the reward function specified during instantiation.
@@ -268,8 +271,11 @@ class AgentTrainer(TrajectoryGenerator):
         # the agent.
         # The easiest way to do this will be to first invert the
         # list and then later just take the first trajectories:
-        agent_trajs = agent_trajs[::-1]
-        avail_steps = sum(len(traj) for traj in agent_trajs)
+        #agent_trajs = agent_trajs[::-1]
+        #avail_steps = sum(len(traj) for traj in agent_trajs)
+        #always sample new since we don't use the video_recorder during training
+        agent_trajs = []
+        avail_steps = 0
 
         exploration_steps = int(self.exploration_frac * steps)
         if self.exploration_frac > 0 and exploration_steps == 0:
@@ -278,64 +284,81 @@ class AgentTrainer(TrajectoryGenerator):
                 f"{self.exploration_frac} > 0 but steps={steps} is too small.",
             )
         agent_steps = steps - exploration_steps
+        agent_steps = math.ceil(agent_steps/(self.venv.num_envs*self.fragment_length))*(self.venv.num_envs*self.fragment_length)
 
         if avail_steps < agent_steps:
             self.logger.log(
                 f"Requested {agent_steps} transitions but only {avail_steps} in buffer."
                 f" Sampling {agent_steps - avail_steps} additional transitions.",
             )
-            sample_until = rollout.make_sample_until(
-                min_timesteps=agent_steps - avail_steps,
-                min_episodes=None,
-            )
+            
             # Important note: we don't want to use the trajectories returned
             # here because 1) they might miss initial timesteps taken by the RL agent
             # and 2) their rewards are the ones provided by the reward model!
             # Instead, we collect the trajectories using the BufferingWrapper.
             algo_venv = self.algorithm.get_env()
             assert algo_venv is not None
-            rollout.generate_trajectories(
-                self.algorithm,
-                algo_venv,
-                sample_until=sample_until,
-                # By setting deterministic_policy to False, we ensure that the rollouts
-                # are collected from a deterministic policy only if self.algorithm is
-                # deterministic. If self.algorithm is stochastic, then policy_callable
-                # will also be stochastic.
-                deterministic_policy=False,
-                rng=self.rng,
-            )
-            additional_trajs, _ = self.buffering_wrapper.pop_finished_trajectories()
-            agent_trajs = list(agent_trajs) + list(additional_trajs)
+            current_buffer_length = 0
+            while current_buffer_length < agent_steps - avail_steps:
+                print("Current length of the buffer:", current_buffer_length)
+                rollout.generate_trajectories(
+                    self.algorithm,
+                    algo_venv,
+                    num_steps=agent_steps - avail_steps - current_buffer_length,
+                    # By setting deterministic_policy to False, we ensure that the rollouts
+                    # are collected from a deterministic policy only if self.algorithm is
+                    # deterministic. If self.algorithm is stochastic, then policy_callable
+                    # will also be stochastic.
+                    deterministic_policy=False,
+                    rng=self.rng,
+                )
+                #additional_trajs, _ = self.buffering_wrapper.pop_finished_trajectories()
+                additional_trajs, ep_lengths = self.buffering_wrapper.pop_trajectories()
+                print("Episode lengths:", ep_lengths)
+                print("Agent trajectories generated:", len(additional_trajs))
+                print("Length of Additional trajectories:", sum(len(traj) for traj in additional_trajs))
+                agent_trajs = list(agent_trajs) + list(additional_trajs)
+                print("Length of the agent trajectories:", sum(len(traj) for traj in agent_trajs))
+                current_buffer_length += sum(len(traj) for traj in agent_trajs)
 
+        print("Agent steps needed:", agent_steps)
         agent_trajs = _get_trajectories(agent_trajs, agent_steps)
 
         trajectories = list(agent_trajs)
+        print("Agent trajectories used:", len(trajectories))
+        print("Length of the agent trajectories:", sum(len(traj) for traj in agent_trajs))
 
         if exploration_steps > 0:
+            exploration_steps = math.ceil(exploration_steps/(self.venv.num_envs*self.fragment_length))*(self.venv.num_envs*self.fragment_length)
             self.logger.log(f"Sampling {exploration_steps} exploratory transitions.")
-            sample_until = rollout.make_sample_until(
-                min_timesteps=exploration_steps,
-                min_episodes=None,
-            )
+
             algo_venv = self.algorithm.get_env()
             assert algo_venv is not None
-            rollout.generate_trajectories(
-                policy=self.exploration_wrapper,
-                venv=algo_venv,
-                sample_until=sample_until,
-                # buffering_wrapper collects rollouts from a non-deterministic policy,
-                # so we do that here as well for consistency.
-                deterministic_policy=False,
-                rng=self.rng,
-            )
-            exploration_trajs, _ = self.buffering_wrapper.pop_finished_trajectories()
-            exploration_trajs = _get_trajectories(exploration_trajs, exploration_steps)
-            # We call _get_trajectories separately on agent_trajs and exploration_trajs
-            # and then just concatenate. This could mean we return slightly too many
-            # transitions, but it gets the proportion of exploratory and agent
-            # transitions roughly right.
-            trajectories.extend(list(exploration_trajs))
+            current_buffer_length = 0
+            while current_buffer_length < agent_steps + exploration_steps:
+                print("Current length of the buffer:", current_buffer_length)
+                rollout.generate_trajectories(
+                    policy=self.exploration_wrapper,
+                    venv=algo_venv,
+                    num_steps=exploration_steps - current_buffer_length,
+                    # buffering_wrapper collects rollouts from a non-deterministic policy,
+                    # so we do that here as well for consistency.
+                    deterministic_policy=False,
+                    rng=self.rng,
+                )
+                #exploration_trajs, _ = self.buffering_wrapper.pop_finished_trajectories()
+                exploration_trajs, _ = self.buffering_wrapper.pop_trajectories()
+                print("Exploration trajectories generated:", len(exploration_trajs))
+                print("Length of the exploration trajectories:", sum(len(traj) for traj in exploration_trajs))
+                exploration_trajs = _get_trajectories(exploration_trajs, exploration_steps)
+                print("Exploration trajectories used:", len(exploration_trajs))
+                print("Length of the exploration trajectories:", sum(len(traj) for traj in exploration_trajs))
+                # We call _get_trajectories separately on agent_trajs and exploration_trajs
+                # and then just concatenate. This could mean we return slightly too many
+                # transitions, but it gets the proportion of exploratory and agent
+                # transitions roughly right.
+                trajectories.extend(list(exploration_trajs))
+                current_buffer_length = sum(len(traj) for traj in trajectories)
         return trajectories
 
     @property
@@ -1015,8 +1038,11 @@ class AbsoluteUncertaintyFragmenter(Fragmenter):
         fragment_length: int,
         num_fragments: int,
     ) -> Sequence[TrajectoryWithRew]:
+        print("Sampling fragments based on absolute uncertainty", len(trajectories), fragment_length, num_fragments)
+        print("Lengths of the Trajectories:", [len(traj) for traj in trajectories])
         fragments = self.sample_fragments(trajectories, num_fragments, fragment_length)
-
+        print("Fragments sampled", len(fragments))
+        print("Lengths of the Fragments:", [len(fragment) for fragment in fragments])
         var_estimates = np.zeros(len(fragments))
         for i, fragment in enumerate(fragments):
             trans = rollout.flatten_trajectories([fragment])
@@ -1053,7 +1079,8 @@ class AbsoluteUncertaintyFragmenter(Fragmenter):
                     rews=traj.rews[i : i + fragment_length],
                     terminal=traj.terminal,
                 )
-                fragments.append(fragment)
+                if len(fragment) >= fragment_length:
+                    fragments.append(fragment)
 
         return fragments
 
@@ -1692,13 +1719,14 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         fragment_pairs = []
         preferences = []
         self.given_preferences_for_frontend = []
-
+        start_time = time.time()
         if self.preference_model is not None and self.preference_model.ensemble_model is not None:
             self.active_learning_suggestions = self.get_active_learning_suggestions(fragments, num_pairs)
 
         self.fragments_for_frontend = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
+        end_time = time.time()
+        self.logger.log(f"Hierarchical clustering took {end_time - start_time} seconds")
         self.feedback_count = 0
 
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
@@ -2536,7 +2564,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # Gather new preferences #
             ##########################
             num_steps = math.ceil(
-                self.transition_oversampling * 2 * (num_pairs + 1) * self.fragment_length,
+                self.transition_oversampling * 2 * num_pairs * self.fragment_length,
             )
             self.logger.log(
                 f"Collecting {2 * num_pairs} fragments ({num_steps} transitions)",
@@ -2546,8 +2574,6 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 trajectories = self.trajectory_generator.sample(num_steps)
                 end_time = time.time()
                 self.logger.log(f"Trajectory generation took {end_time - start_time} seconds")
-                # pop the last trajectory (since the video could not be saved correctly)
-                trajectories.pop()
 
                 # This assumes there are no fragments missing initial timesteps
                 # (but allows for fragments missing terminal timesteps).
