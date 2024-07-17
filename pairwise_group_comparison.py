@@ -23,15 +23,19 @@ gravity = -9.81
 
 rng = np.random.default_rng(0)
 
+# we need a videoWrapper only for the first environment, since the VideoRecorder can't be used in parallel environments
 def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
-    return VideoWrapper(
-        env,
-        directory='videos',
-        record_video_trigger = lambda step: step % fragment_length == 0,
-        video_length=fragment_length,
-        name_prefix=f'rl-video-env-{i}',
-        timeline=True
-    )
+    if i == 0:
+        return VideoWrapper(
+            env,
+            directory='videos',
+            record_video_trigger = lambda step: step % fragment_length == 0,
+            video_length=fragment_length,
+            name_prefix=f'rl-video-env-{i}',
+            timeline=True
+        )
+    else:
+        return env
 
 venv = make_vec_env(
     "Hopper-v4",

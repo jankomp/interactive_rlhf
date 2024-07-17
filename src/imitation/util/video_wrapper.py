@@ -7,6 +7,8 @@ import gymnasium as gym
 from gymnasium.core import WrapperActType, WrapperObsType
 from gymnasium.wrappers.monitoring import video_recorder
 import os
+import imageio
+import numpy as np
 
 
 class VideoWrapper(gym.Wrapper):
@@ -148,3 +150,39 @@ class VideoWrapper(gym.Wrapper):
 
     def __del__(self):
         self.close()
+
+    def add_timelines(self):
+        step = 0
+        color = (255, 0, 0)
+        start_point = 0
+
+        for fragment_path in self.fragment_paths:
+            # Open the video file
+            reader = imageio.get_reader(fragment_path)
+
+            # Get the size of the frames in the video
+            frame_height, frame_width = reader.get_meta_data()['source_size']
+
+            # Create a temporary VideoWriter object to write the modified frames to a new video
+            temp_path = 'temp_' + os.path.basename(fragment_path)
+            writer = imageio.get_writer(temp_path, fps=reader.get_meta_data()['fps'])
+
+            for frame in reader:
+                # Calculate the start and end points of the timeline
+                end_point = int(step / self.episode_length * frame_width)
+                
+                # Draw the timeline on the frame
+                frame[frame_height - 5:frame_height, start_point:end_point] = np.array(color, dtype=np.uint8)
+
+                # Write the modified frame to the new video
+                writer.append_data(frame)
+
+                step += 1
+
+            # Close the reader and writer
+            reader.close()
+            writer.close()
+
+            # Overwrite the original video with the new video
+            os.remove(fragment_path)
+            os.rename(temp_path, fragment_path)

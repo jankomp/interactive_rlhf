@@ -261,6 +261,15 @@ class AgentTrainer(TrajectoryGenerator):
         )
 
     def sample(self, steps: int) -> Sequence[types.TrajectoryWithRew]:
+        # Create a new vectorized environment that contains only one sub-environment
+        single_env = vec_env.DummyVecEnv([lambda: self.algorithm.get_env().envs[0]])
+
+        self.buffering_wrapper = wrappers.BufferingWrapper(single_env)
+        single_env = self.reward_venv_wrapper = reward_wrapper.RewardVecEnvWrapper(
+            self.buffering_wrapper,
+            reward_fn=self.reward_fn,
+        )
+        
         agent_trajs, _ = self.buffering_wrapper.pop_finished_trajectories()
         # We typically have more trajectories than are needed.
         # In that case, we use the final trajectories because
@@ -296,7 +305,7 @@ class AgentTrainer(TrajectoryGenerator):
             assert algo_venv is not None
             rollout.generate_trajectories(
                 self.algorithm,
-                algo_venv,
+                single_env,
                 sample_until=sample_until,
                 # By setting deterministic_policy to False, we ensure that the rollouts
                 # are collected from a deterministic policy only if self.algorithm is
@@ -322,7 +331,7 @@ class AgentTrainer(TrajectoryGenerator):
             assert algo_venv is not None
             rollout.generate_trajectories(
                 policy=self.exploration_wrapper,
-                venv=algo_venv,
+                venv=single_env,
                 sample_until=sample_until,
                 # buffering_wrapper collects rollouts from a non-deterministic policy,
                 # so we do that here as well for consistency.
