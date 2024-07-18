@@ -25,6 +25,7 @@ class VideoRecorder:
         base_path: Optional[str] = None,
         resize_resolution: Optional[tuple] = None,
         disable_logger: bool = False,
+        every_nth_timestep: Optional[int] = 1
     ):
         """Video recorder renders a nice movie of a rollout, frame by frame.
 
@@ -86,7 +87,7 @@ class VideoRecorder:
                 f"Invalid path given: {self.path} -- must have file extension {required_ext}."
             )
 
-        self.frames_per_sec = env.metadata.get("render_fps", 30) / 2
+        self.frames_per_sec = env.metadata.get("render_fps", 30) // every_nth_timestep
 
         self.broken = False
 

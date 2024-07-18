@@ -30,6 +30,7 @@ class VideoWrapper(gym.Wrapper):
         video_length=200,
         name_prefix='rl-video',
         timeline=False,
+        every_nth_timestep = 1,
     ):
         """Builds a VideoWrapper.
 
@@ -61,6 +62,7 @@ class VideoWrapper(gym.Wrapper):
         self.fragment_paths = []
 
         self.timeline = timeline
+        self.every_nth_timestep = every_nth_timestep
         self.active = False
 
     def deactivate(self):
@@ -85,6 +87,7 @@ class VideoWrapper(gym.Wrapper):
             base_path=base_path,
             metadata={"episode_id": self.episode_id},
             disable_logger=True,
+            every_nth_timestep=self.every_nth_timestep,
         )
 
         self.recorded_frames = 0
@@ -120,7 +123,7 @@ class VideoWrapper(gym.Wrapper):
         info['video_path'] = self.video_recorder.path
 
         if self.video_recorder is not None:
-            if self.step_id % 2 == 0:
+            if self.step_id % self.every_nth_timestep == 0:
                 self.video_recorder.capture_frame()
             self.recorded_frames += 1
 

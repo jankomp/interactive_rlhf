@@ -32,7 +32,8 @@ def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
             record_video_trigger = lambda step: step % fragment_length == 0,
             video_length=fragment_length,
             name_prefix=f'rl-video-env-{i}',
-            timeline=True
+            timeline=True,
+            every_nth_timestep=3,
         )
     else:
         return env
