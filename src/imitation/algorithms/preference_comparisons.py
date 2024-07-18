@@ -54,7 +54,7 @@ from imitation.regularization import regularizers
 from imitation.rewards import reward_function, reward_nets, reward_wrapper
 from imitation.util import logger as imit_logger
 from imitation.util import networks, util
-from imitation.util import vec_video_recorder
+from src.imitation.util import vec_video_wrapper
 
 from IPython.display import HTML, display, clear_output
 import ipywidgets as widgets
@@ -432,7 +432,7 @@ class AgentTrainerWithVideoBuffering(AgentTrainer):
         if not os.path.exists(video_folder):
             os.makedirs(video_folder)
         # Wrapping the environment with VecVideoRecorder
-        venv = vec_video_recorder.VecVideoRecorder(
+        venv = vec_video_wrapper.VecVideoRecorder(
             venv,
             video_folder=video_folder,
             record_video_trigger=record_video_trigger,

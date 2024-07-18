@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, SupportsFloat, Tuple
 
 import gymnasium as gym
 from gymnasium.core import WrapperActType, WrapperObsType
-from gymnasium.wrappers.monitoring import video_recorder
+from imitation.util.video_recorder import VideoRecorder
 import os
 import imageio
 import numpy as np
@@ -15,7 +15,7 @@ class VideoWrapper(gym.Wrapper):
     """Creates videos from wrapped environment by calling render after each timestep."""
 
     episode_id: int
-    video_recorder: Optional[video_recorder.VideoRecorder]
+    video_recorder: Optional[VideoRecorder]
     directory: pathlib.Path
     record_video_trigger: Any
     video_length: int
@@ -80,7 +80,7 @@ class VideoWrapper(gym.Wrapper):
         video_name = '{}-step-{}-to-step-{}'.format(self.name_prefix, self.step_id,
                                                     self.step_id + self.video_length)
         base_path = os.path.join(self.directory, video_name)
-        self.video_recorder = video_recorder.VideoRecorder(
+        self.video_recorder = VideoRecorder(
             env=self.env,
             base_path=base_path,
             metadata={"episode_id": self.episode_id},
@@ -120,7 +120,8 @@ class VideoWrapper(gym.Wrapper):
         info['video_path'] = self.video_recorder.path
 
         if self.video_recorder is not None:
-            self.video_recorder.capture_frame()
+            if self.step_id % 2 == 0:
+                self.video_recorder.capture_frame()
             self.recorded_frames += 1
 
             self.step_id += 1
