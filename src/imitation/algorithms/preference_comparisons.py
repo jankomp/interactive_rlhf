@@ -54,7 +54,6 @@ from imitation.regularization import regularizers
 from imitation.rewards import reward_function, reward_nets, reward_wrapper
 from imitation.util import logger as imit_logger
 from imitation.util import networks, util
-from src.imitation.util import vec_video_wrapper
 
 from IPython.display import HTML, display, clear_output
 import ipywidgets as widgets
@@ -1702,12 +1701,15 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         preferences = []
         self.given_preferences_for_frontend = []
 
+        start_time = time.time()
         if self.preference_model is not None and self.preference_model.ensemble_model is not None:
             self.active_learning_suggestions = self.get_active_learning_suggestions(fragments, num_pairs)
 
         self.fragments_for_frontend = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
+        end_time = time.time()
+        self.logger.log(f"Hierarchical clustering took {end_time - start_time} seconds")
+        
         self.feedback_count = 0
 
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
