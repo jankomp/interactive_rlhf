@@ -13,6 +13,7 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
 import torch.optim as optim
+import Hopper_v4_1
 
 # make sure that max_episode_steps is divisible by fragment_length
 total_timesteps = 100_000
@@ -39,7 +40,7 @@ def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
         return env
 
 venv = make_vec_env(
-    "Hopper-v4",
+    "Hopper-v4.1",
     rng=rng,
     render_mode='rgb_array',
     n_envs=8,
