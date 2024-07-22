@@ -1341,7 +1341,10 @@ class HumanGathererAPI(PreferenceGatherer):
 
     def display_videos(self, video_path1: str, video_path2: str) -> None:
         self.videos = [video_path1, video_path2]
-        self.send_videos()        
+        self.send_videos()       
+
+    def close(self):
+        self.app.stop() 
 
     def get_human_feedback(self) -> float:
         key = self.queue.get()
@@ -1596,6 +1599,9 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.queue.put(data)
         self.feedback_count += (self.augment_to_group_size if len(data['group1']) < self.augment_to_group_size else len(data['group1'])) + (self.augment_to_group_size if len(data['group2']) < self.augment_to_group_size else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
         return jsonify({'feedback_count:': self.feedback_count})
+
+    def close(self):
+        self.app.stop()
 
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
         n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
@@ -2639,5 +2645,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if callback:
                 callback(self._iteration)
             self._iteration += 1
+
+        if isinstance(self.preference_gatherer, HumanGathererAPI) or isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
+            self.preference_gatherer.close()
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
