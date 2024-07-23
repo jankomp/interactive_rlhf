@@ -59,6 +59,8 @@ from IPython.display import HTML, display, clear_output
 import ipywidgets as widgets
 from functools import wraps
 from flask import Flask, Response, request, jsonify, send_file
+from werkzeug.serving import make_server
+import threading
 import time
 import json
 from flask_cors import CORS
@@ -1292,6 +1294,19 @@ class SyntheticGatherer(PreferenceGatherer):
             ],
         )
         return np.array(rews1, dtype=np.float32), np.array(rews2, dtype=np.float32)
+    
+class ServerThread(threading.Thread):
+    def __init__(self, app):
+        threading.Thread.__init__(self)
+        self.server = make_server('0.0.0.0', 5000, app)
+        self.ctx = app.app_context()
+        self.ctx.push()
+
+    def run(self):
+        self.server.serve_forever()
+
+    def shutdown(self):
+        self.server.shutdown()
 
 class HumanGathererAPI(PreferenceGatherer):
     """Collects human feedback by displaying videos and capturing keyboard inputs."""
@@ -1310,20 +1325,26 @@ class HumanGathererAPI(PreferenceGatherer):
         self.videos = ['','']
         self.queue = Queue()
         self.feedback_count = 1
+        self.feedback_time = 0
         self.total_feedbacks = total_feedbacks
         self.fragmenter = fragmenter
         self.app.route('/key_press', methods=['POST'])(self.key_press)
         self.app.route('/stream')(self.stream)
         self.app.route('/videos/<path:filename>')(self.serve_video)
         self.app.route('/total_feedbacks')(self.get_total_feedbacks)
+        self.app.route('/feedback_time')(self.get_feedback_time)
         print('Starting server in a new thread')
-        Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
+        self.server = ServerThread(self.app)
+        self.server.start()
 
     def send_videos(self):
         yield 'data: {}\n\n'.format(json.dumps(self.videos))
 
     def get_total_feedbacks(self):
         return jsonify({'total_feedbacks': self.total_feedbacks})
+    
+    def get_feedback_time(self):
+        return jsonify({'feedback_time': self.feedback_time})
 
     def key_press(self):
         key = request.json.get('key')
@@ -1344,7 +1365,7 @@ class HumanGathererAPI(PreferenceGatherer):
         self.send_videos()       
 
     def close(self):
-        self.app.stop() 
+        self.server.shutdown()
 
     def get_human_feedback(self) -> float:
         key = self.queue.get()
@@ -1363,6 +1384,7 @@ class HumanGathererAPI(PreferenceGatherer):
         """Gather human preferences for the given fragment pairs."""
         preferences = []
         fragment_pairs = []
+        start_time = time.time()
         while len(preferences) < num_pairs:
             fragment_pair = self.fragmenter.get_fragment_pair(trajectories, fragment_length)
             video_path1 = find_video_file(fragment_pair[0].infos)
@@ -1380,6 +1402,9 @@ class HumanGathererAPI(PreferenceGatherer):
             preferences.append(feedback)
             fragment_pairs.append(fragment_pair)
         self.display_videos('','')
+        end_time = time.time()
+        self.feedback_time += end_time - start_time
+        print(f"Feedback took {end_time - start_time} seconds")
 
         return fragment_pairs, np.array(preferences, dtype=np.float32)
     
@@ -1554,6 +1579,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         CORS(self.app)
         self.feedback_count = 0
         self.total_feedbacks = total_feedbacks
+        self.round_feedbacks = 0
+        self.feedback_time = 0
         self.preference_model = preference_model
         self.current_fragments_hash = None
         self.active_learning_suggestions = []
@@ -1568,11 +1595,16 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app.route('/suggestions')(self.get_suggestions)
         self.app.route('/given_preferences')(self.get_given_preferences)
         self.app.route('/preference', methods=['POST'])(self.post_preference_pairs)
+        self.app.route('/round_feedbacks', self.get_round_feedbacks)
         print('Starting server in a new thread')
-        Thread(target=self.app.run, kwargs={'host': '0.0.0.0', 'debug': True, 'use_reloader': False, 'threaded': True}).start()
-    
+        self.server = ServerThread(self.app)
+        self.server.start()
+
     def get_total_feedbacks(self):
-        return jsonify({'given_feedbacks': self.feedback_count, 'total_feedbacks': self.total_feedbacks})
+        return jsonify({'given_feedbacks': self.feedback_count, 'round_feedbacks': self.round_feedbacks,'total_feedbacks': self.total_feedbacks})
+    
+    def get_round_feedbacks(self):
+        return jsonify({'round_feedbacks': self.round_feedbacks})
     
     def send_fragment_hash(self):
         yield 'data: {}\n\n'.format(json.dumps(self.current_fragments_hash))
@@ -1598,10 +1630,10 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         data = request.json
         self.queue.put(data)
         self.feedback_count += (self.augment_to_group_size if len(data['group1']) < self.augment_to_group_size else len(data['group1'])) + (self.augment_to_group_size if len(data['group2']) < self.augment_to_group_size else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
-        return jsonify({'feedback_count:': self.feedback_count})
+        return jsonify({'feedback_count': self.feedback_count})
 
     def close(self):
-        self.app.stop()
+        self.server.shutdown()
 
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
         n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
@@ -1706,6 +1738,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         fragment_pairs = []
         preferences = []
         self.given_preferences_for_frontend = []
+        self.round_feedbacks = num_pairs
 
         start_time = time.time()
         if self.preference_model is not None and self.preference_model.ensemble_model is not None:
@@ -1720,6 +1753,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
 
+        begin_of_feedback_round = time.time()
         while self.feedback_count < num_pairs:
             feedback = self.queue.get()
             # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
@@ -1746,6 +1780,9 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                             'id2': j,
                             'preference': preference
                         })
+            end_of_feedback_round = time.time()
+            self.logger.log(f"Feedback {self.feedback_count} took {end_of_feedback_round - begin_of_feedback_round} seconds")
+            self.feedback_time += end_of_feedback_round - begin_of_feedback_round
             print(f'Feedback count: {self.feedback_count}/{num_pairs}')
             print(f'Preferences: {len(preferences)}')
             print(f'Fragment pairs: {len(fragment_pairs)}')
@@ -2645,8 +2682,5 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if callback:
                 callback(self._iteration)
             self._iteration += 1
-
-        if isinstance(self.preference_gatherer, HumanGathererAPI) or isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
-            self.preference_gatherer.close()
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}

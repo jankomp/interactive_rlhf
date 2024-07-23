@@ -6,11 +6,12 @@ from imitation.util.util import make_vec_env
 from imitation.policies.base import FeedForward32Policy, NormalizeFeaturesExtractor
 from imitation.regularization.regularizers import LpRegularizer
 from imitation.regularization.updaters import IntervalParamScaler
-from imitation.util.vec_video_recorder import VecVideoRecorder
+from imitation.util.video_wrapper import VideoWrapper
 import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
 import torch.optim as optim
+import Hopper_v4_1
 
 # make sure that max_episode_steps is divisible by fragment_length
 total_timesteps = 100_000
@@ -21,18 +22,32 @@ gravity = -9.81
 
 rng = np.random.default_rng(0)
 
+def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
+    if i == 0:
+        return VideoWrapper(
+            env,
+            directory='videos',
+            record_video_trigger = lambda step: step % fragment_length == 0,
+            video_length=fragment_length,
+            name_prefix=f'rl-video-env-{i}',
+            timeline=True,
+            every_nth_timestep=3,
+        )
+    else:
+        return env
+    
 venv = make_vec_env(
-    "Hopper-v4",
+    "Hopper-v4.1",
     rng=rng,
     render_mode='rgb_array',
-    n_envs=1,
+    n_envs=8,
     max_episode_steps=max_episode_steps,
     env_make_kwargs={'terminate_when_unhealthy': False},
     gravity=gravity,
-    post_wrappers=[VecVideoRecorder],
+    post_wrappers=[video_recorder_wrapper],
 )
 
-reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(5)]
+reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(2)]
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
 preference_model = preference_comparisons.PreferenceModel(reward_net)
@@ -99,15 +114,15 @@ agent = PPO(
     n_epochs=10,
 )
 
-trajectory_generator = preference_comparisons.AgentTrainerWithVideoBuffering(
+trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
     reward_fn=reward_net,
     venv=venv,
     rng=rng,
     exploration_frac=0.05,
-    video_folder='videos',
-    video_length=fragment_length,
-    name_prefix='rl-video'
+    #video_folder='videos',
+    #video_length=fragment_length,
+    #name_prefix='rl-video'
 )
 
 
