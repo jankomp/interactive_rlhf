@@ -64,7 +64,7 @@ import threading
 import time
 import json
 from flask_cors import CORS
-from threading import Thread
+from threading import Thread, Event
 
 from scipy.spatial.distance import euclidean
 from fastdtw import fastdtw
@@ -1308,6 +1308,46 @@ class ServerThread(threading.Thread):
     def shutdown(self):
         self.server.shutdown()
 
+class TimerThread(Thread):
+    def __init__(self):
+        super().__init__()
+        self.start_time = None
+        self.elapsed_time = 0.0
+        self.paused = False
+        self.stop_event = Event()
+        self.blocked = True
+
+    def run(self):
+        while not self.stop_event.is_set():
+            if not self.blocked and self.start_time is not None:
+                if not self.paused:
+                    self.elapsed_time = time.time() - self.start_time
+            time.sleep(0.1)
+
+    def pause(self):
+        self.paused = True
+
+    def resume(self):
+        self.paused = False
+        if self.elapsed_time:
+            self.start_time = time.time() - self.elapsed_time
+
+    def stop(self):
+        self.stop_event.set()
+
+    def get_elapsed_time(self):
+        return self.elapsed_time
+    
+    def block(self):
+        self.blocked = True
+
+    def unblock(self):
+        self.blocked = False
+        if not self.paused:
+            if self.start_time is None:
+                self.start_time = time.time()
+            self.resume()
+
 class HumanGathererAPI(PreferenceGatherer):
     """Collects human feedback by displaying videos and capturing keyboard inputs."""
 
@@ -1325,7 +1365,8 @@ class HumanGathererAPI(PreferenceGatherer):
         self.videos = ['','']
         self.queue = Queue()
         self.feedback_count = 1
-        self.feedback_time = 0
+        self.timer = TimerThread()
+        self.timer.start()
         self.total_feedbacks = total_feedbacks
         self.fragmenter = fragmenter
         self.app.route('/key_press', methods=['POST'])(self.key_press)
@@ -1333,6 +1374,8 @@ class HumanGathererAPI(PreferenceGatherer):
         self.app.route('/videos/<path:filename>')(self.serve_video)
         self.app.route('/total_feedbacks')(self.get_total_feedbacks)
         self.app.route('/feedback_time')(self.get_feedback_time)
+        self.app.route('/pause')(self.pause_timer)
+        self.app.route('/resume')(self.resume_timer)
         print('Starting server in a new thread')
         self.server = ServerThread(self.app)
         self.server.start()
@@ -1342,9 +1385,6 @@ class HumanGathererAPI(PreferenceGatherer):
 
     def get_total_feedbacks(self):
         return jsonify({'total_feedbacks': self.total_feedbacks})
-    
-    def get_feedback_time(self):
-        return jsonify({'feedback_time': self.feedback_time})
 
     def key_press(self):
         key = request.json.get('key')
@@ -1362,10 +1402,23 @@ class HumanGathererAPI(PreferenceGatherer):
 
     def display_videos(self, video_path1: str, video_path2: str) -> None:
         self.videos = [video_path1, video_path2]
-        self.send_videos()       
+        self.timer.unblock()
+        self.send_videos()
+    
+    def get_feedback_time(self):
+        return jsonify({'timeElapsed': self.timer.get_elapsed_time()})
+    
+    def pause_timer(self):
+        self.timer.pause()
+        return jsonify({'message': 'Timer paused', 'timeElapsed': self.timer.get_elapsed_time()})
+
+    def resume_timer(self):
+        self.timer.resume()
+        return jsonify({'message': 'Timer resumed', 'timeElapsed': self.timer.get_elapsed_time()})       
 
     def close(self):
         self.server.shutdown()
+        self.timer.stop()
 
     def get_human_feedback(self) -> float:
         key = self.queue.get()
@@ -1384,7 +1437,6 @@ class HumanGathererAPI(PreferenceGatherer):
         """Gather human preferences for the given fragment pairs."""
         preferences = []
         fragment_pairs = []
-        start_time = time.time()
         while len(preferences) < num_pairs:
             fragment_pair = self.fragmenter.get_fragment_pair(trajectories, fragment_length)
             video_path1 = find_video_file(fragment_pair[0].infos)
@@ -1402,9 +1454,8 @@ class HumanGathererAPI(PreferenceGatherer):
             preferences.append(feedback)
             fragment_pairs.append(fragment_pair)
         self.display_videos('','')
-        end_time = time.time()
-        self.feedback_time += end_time - start_time
-        print(f"Feedback took {end_time - start_time} seconds")
+        self.timer.block()
+        print(f"Feedback took {self.timer.get_elapsed_time()} seconds in total")
 
         return fragment_pairs, np.array(preferences, dtype=np.float32)
     
@@ -1580,7 +1631,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.feedback_count = 0
         self.total_feedbacks = total_feedbacks
         self.round_feedbacks = 0
-        self.feedback_time = 0
+        self.timer = TimerThread()
+        self.timer.start()
         self.preference_model = preference_model
         self.current_fragments_hash = None
         self.active_learning_suggestions = []
@@ -1596,6 +1648,9 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app.route('/given_preferences')(self.get_given_preferences)
         self.app.route('/preference', methods=['POST'])(self.post_preference_pairs)
         self.app.route('/round_feedbacks', self.get_round_feedbacks)
+        self.app.route('/feedback_time')(self.get_feedback_time)
+        self.app.route('/pause')(self.pause_timer)
+        self.app.route('/resume')(self.resume_timer)
         print('Starting server in a new thread')
         self.server = ServerThread(self.app)
         self.server.start()
@@ -1631,8 +1686,20 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.queue.put(data)
         self.feedback_count += (self.augment_to_group_size if len(data['group1']) < self.augment_to_group_size else len(data['group1'])) + (self.augment_to_group_size if len(data['group2']) < self.augment_to_group_size else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
         return jsonify({'feedback_count': self.feedback_count})
+    
+    def get_feedback_time(self):
+        return jsonify({'timeElapsed': self.timer.get_elapsed_time()})
+    
+    def pause_timer(self):
+        self.timer.pause()
+        return jsonify({'message': 'Timer paused', 'timeElapsed': self.timer.get_elapsed_time()})
+
+    def resume_timer(self):
+        self.timer.resume()
+        return jsonify({'message': 'Timer resumed', 'timeElapsed': self.timer.get_elapsed_time()}) 
 
     def close(self):
+        self.timer.stop()
         self.server.shutdown()
 
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
@@ -1753,9 +1820,9 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
 
-        begin_of_feedback_round = time.time()
         while self.feedback_count < num_pairs:
             feedback = self.queue.get()
+            self.timer.unblock()
             # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
             # we create one preference for each possible pair of fragments across the two groups with the value of preference
             preference = 1.0 if feedback['preference'] == 'ArrowLeft' else 0.0 if feedback['preference'] == 'ArrowRight' else 0.5 if feedback['preference'] == 'ArrowUp' else None
@@ -1780,12 +1847,11 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                             'id2': j,
                             'preference': preference
                         })
-            end_of_feedback_round = time.time()
-            self.logger.log(f"Feedback {self.feedback_count} took {end_of_feedback_round - begin_of_feedback_round} seconds")
-            self.feedback_time += end_of_feedback_round - begin_of_feedback_round
             print(f'Feedback count: {self.feedback_count}/{num_pairs}')
             print(f'Preferences: {len(preferences)}')
             print(f'Fragment pairs: {len(fragment_pairs)}')
+        self.timer.block()
+        self.logger.log(f"Feedback took {self.timer.get_elapsed_time()} seconds in total")
 
         self.current_fragments_hash = None
         return fragment_pairs, np.array(preferences, dtype=np.float32)
