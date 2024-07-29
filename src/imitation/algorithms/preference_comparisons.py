@@ -1647,7 +1647,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app.route('/suggestions')(self.get_suggestions)
         self.app.route('/given_preferences')(self.get_given_preferences)
         self.app.route('/preference', methods=['POST'])(self.post_preference_pairs)
-        self.app.route('/round_feedbacks', self.get_round_feedbacks)
+        self.app.route('/round_feedbacks')(self.get_round_feedbacks)
         self.app.route('/feedback_time')(self.get_feedback_time)
         self.app.route('/pause')(self.pause_timer)
         self.app.route('/resume')(self.resume_timer)

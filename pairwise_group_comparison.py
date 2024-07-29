@@ -13,14 +13,27 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
 import torch.optim as optim
-import Hopper_v4_1
+from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1
 
-# make sure that max_episode_steps is divisible by fragment_length
+# BEGIN: PARAMETERS
 total_timesteps = 100_000
 total_comparisons = 500
-max_episode_steps = 200
-fragment_length = 25
+max_episode_steps = 200 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
+every_n_frames = 3 # when to record a frame
 gravity = -9.81
+environment_number = 2 # integer from 0 to 7
+# END: PARAMETERS
+
+environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
+chosen_environment = environments[environment_number]
+chosen_environment_short_name = chosen_environment.split('-v')[0]
+print(f"Chosen environment: {chosen_environment_short_name}")
+env_make_kwargs = {'terminate_when_unhealthy': False}
+
+# some environments need a higher framerate
+if chosen_environment in [3, 4, 6, 7]:
+     every_n_frames = 1
 
 rng = np.random.default_rng(0)
 
@@ -34,18 +47,18 @@ def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
             video_length=fragment_length,
             name_prefix=f'rl-video-env-{i}',
             timeline=True,
-            every_nth_timestep=3,
+            every_nth_timestep=every_n_frames,
         )
     else:
         return env
 
 venv = make_vec_env(
-    "Hopper-v4.1",
+    chosen_environment,
     rng=rng,
     render_mode='rgb_array',
     n_envs=8,
     max_episode_steps=max_episode_steps,
-    env_make_kwargs={'terminate_when_unhealthy': False},
+    env_make_kwargs=env_make_kwargs,
     gravity=gravity,
     post_wrappers=[video_recorder_wrapper],
 )
@@ -183,14 +196,14 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save('rlhf_hopper')
+learner.save('rlhf_' + chosen_environment_short_name)
 
 from gymnasium.wrappers import RecordVideo
 
 # Create the environment
-env = gym.make("Hopper-v4", render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
+env = gym.make(chosen_environment, render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
 env.model.opt.gravity[2] = gravity
-env = RecordVideo(env, './evaluation_videos', name_prefix="hopper", episode_trigger=lambda x: x % 1 == 0) 
+env = RecordVideo(env, './evaluation_videos', name_prefix=chosen_environment_short_name, episode_trigger=lambda x: x % 1 == 0) 
 # Run the model in the environment
 obs, info = env.reset()
 for _ in range(1000):

@@ -305,7 +305,7 @@ class HopperEnv(MujocoEnv, utils.EzPickle):
 # Register the environment
 register(
     id='Hopper-v4.1',
-    entry_point='Hopper_v4_1:HopperEnv',
+    entry_point='src.imitation.util.custom_envs.hopper_v4_1:HopperEnv',
     max_episode_steps=1000,
     reward_threshold=3800.0,
 )

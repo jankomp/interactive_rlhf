@@ -11,14 +11,27 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
 import torch.optim as optim
-import Hopper_v4_1
+from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1
 
-# make sure that max_episode_steps is divisible by fragment_length
+# BEGIN: PARAMETERS
 total_timesteps = 100_000
 total_comparisons = 500
-max_episode_steps = 1000
-fragment_length = 25
+max_episode_steps = 200 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
+every_n_frames = 3 # when to record a frame
 gravity = -9.81
+environment_number = 2 # integer from 0 to 7
+# END: PARAMETERS
+
+environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
+chosen_environment = environments[environment_number]
+chosen_environment_short_name = chosen_environment.split('-v')[0]
+print(f"Chosen environment: {chosen_environment_short_name}")
+env_make_kwargs = {'terminate_when_unhealthy': False}
+
+# some environments need a higher framerate
+if chosen_environment in [3, 4, 6, 7]:
+     every_n_frames = 1
 
 rng = np.random.default_rng(0)
 
