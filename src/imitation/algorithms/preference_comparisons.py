@@ -1368,11 +1368,13 @@ class HumanGathererAPI(PreferenceGatherer):
         self.timer = TimerThread()
         self.timer.start()
         self.total_feedbacks = total_feedbacks
+        self.round_feedbacks = 0
         self.fragmenter = fragmenter
         self.app.route('/key_press', methods=['POST'])(self.key_press)
         self.app.route('/stream')(self.stream)
         self.app.route('/videos/<path:filename>')(self.serve_video)
         self.app.route('/total_feedbacks')(self.get_total_feedbacks)
+        self.app.route('/round_feedbacks')(self.get_round_feedbacks)
         self.app.route('/feedback_time')(self.get_feedback_time)
         self.app.route('/pause')(self.pause_timer)
         self.app.route('/resume')(self.resume_timer)
@@ -1385,6 +1387,9 @@ class HumanGathererAPI(PreferenceGatherer):
 
     def get_total_feedbacks(self):
         return jsonify({'total_feedbacks': self.total_feedbacks})
+    
+    def get_round_feedbacks(self):
+        return jsonify({'round_feedbacks': self.round_feedbacks})
 
     def key_press(self):
         key = request.json.get('key')
@@ -1437,6 +1442,7 @@ class HumanGathererAPI(PreferenceGatherer):
         """Gather human preferences for the given fragment pairs."""
         preferences = []
         fragment_pairs = []
+        self.round_feedbacks += num_pairs
         while len(preferences) < num_pairs:
             fragment_pair = self.fragmenter.get_fragment_pair(trajectories, fragment_length)
             video_path1 = find_video_file(fragment_pair[0].infos)
@@ -1805,7 +1811,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         fragment_pairs = []
         preferences = []
         self.given_preferences_for_frontend = []
-        self.round_feedbacks = num_pairs
+        self.round_feedbacks += num_pairs
 
         start_time = time.time()
         if self.preference_model is not None and self.preference_model.ensemble_model is not None:
