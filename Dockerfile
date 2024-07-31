@@ -88,6 +88,9 @@ RUN pip install -e .
 # for using reacher
 RUN pip install gymnasium[mujoco]
 
+# Fix swimmer environment
+RUN sed -i 's/collision="predefined"//g' /venv/lib/python3.8/site-packages/gymnasium/envs/mujoco/assets/swimmer.xml
+
 # for presenting the videos when gathering preferences from humans
 RUN pip install opencv-python pygame moviepy flask flask_cors fastdtw imageio
 
