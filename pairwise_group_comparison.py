@@ -18,11 +18,12 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
 total_comparisons = 500
-max_episode_steps = 200 # make sure that max_episode_steps is divisible by fragment_length
-fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
+max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 200 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
-gravity = -9.81
-environment_number = 2 # integer from 0 to 7
+gravity = -5
+environment_number = 1 # integer from 0 to 7
+final_training_timesteps = 200_000
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -63,7 +64,7 @@ venv = make_vec_env(
     post_wrappers=[video_recorder_wrapper],
 )
 
-reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(2)]
+reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
 preference_model = preference_comparisons.PreferenceModel(reward_net)
@@ -137,7 +138,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
     reward_fn=reward_net,
     venv=venv,
     rng=rng,
-    exploration_frac=0.05,
+    exploration_frac=0.2,
     #video_folder='videos',
     #video_length=fragment_length,
     #name_prefix='rl-video',
@@ -187,7 +188,8 @@ learner = PPO(
     gamma=0.97,
     learning_rate=2e-3,
 )
-learner.learn(100_000)  # Note: set to 100_000 to train a proficient expert
+print(f"Training the learner for {final_training_timesteps} timesteps")
+learner.learn(final_training_timesteps)  # Note: set to 100_000 to train a proficient expert
 
 from stable_baselines3.common.evaluation import evaluate_policy
 

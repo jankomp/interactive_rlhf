@@ -1690,7 +1690,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     def post_preference_pairs(self):
         data = request.json
         self.queue.put(data)
-        self.feedback_count += (self.augment_to_group_size if len(data['group1']) < self.augment_to_group_size else len(data['group1'])) + (self.augment_to_group_size if len(data['group2']) < self.augment_to_group_size else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
+        #self.feedback_count += (self.augment_to_group_size if len(data['group1']) < self.augment_to_group_size else len(data['group1'])) + (self.augment_to_group_size if len(data['group2']) < self.augment_to_group_size else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
+        self.feedback_count += 1
         return jsonify({'feedback_count': self.feedback_count})
     
     def get_feedback_time(self):
@@ -1811,7 +1812,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         fragment_pairs = []
         preferences = []
         self.given_preferences_for_frontend = []
-        self.round_feedbacks += num_pairs
+        self.round_feedbacks += (num_pairs / 5)
 
         start_time = time.time()
         if self.preference_model is not None and self.preference_model.ensemble_model is not None:
@@ -1826,7 +1827,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
 
-        while self.feedback_count < num_pairs:
+        while self.feedback_count < (num_pairs / 5):
             feedback = self.queue.get()
             self.timer.unblock()
             # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
@@ -1853,7 +1854,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                             'id2': j,
                             'preference': preference
                         })
-            print(f'Feedback count: {self.feedback_count}/{num_pairs}')
+            print(f'Feedback count: {self.feedback_count}/{self.round_feedbacks}')
             print(f'Preferences: {len(preferences)}')
             print(f'Fragment pairs: {len(fragment_pairs)}')
         self.timer.block()
