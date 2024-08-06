@@ -160,12 +160,12 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
     query_schedule="constant",
-    tb_log_name='groupwise_comparison',
 )
 
 pref_comparisons.train(
     total_timesteps=total_timesteps,
     total_comparisons=total_comparisons,
+    tb_log_name='groupwise_comparison',
 )
 
 from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
