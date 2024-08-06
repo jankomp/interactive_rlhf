@@ -1635,7 +1635,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app = Flask(__name__)
         CORS(self.app)
         self.feedback_count = 0
-        self.total_feedbacks = total_feedbacks
+        self.total_feedbacks = total_feedbacks / 5
         self.round_feedbacks = 0
         self.timer = TimerThread()
         self.timer.start()
@@ -1822,8 +1822,6 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
         end_time = time.time()
         self.logger.log(f"Hierarchical clustering took {end_time - start_time} seconds")
-        
-        self.feedback_count = 0
 
         comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
 
@@ -2743,7 +2741,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 if not isinstance(self.fragmenter, JsonFragmenter):
                     self.logger.log(f"Training agent for {num_steps} timesteps")
                     start_time = time.time()
-                    self.trajectory_generator.train(steps=num_steps)#, tb_log_name=tb_log_name)
+                    self.trajectory_generator.train(steps=num_steps, tb_log_name=tb_log_name)
                     end_time = time.time()
                     self.logger.log(f"Agent training took {end_time - start_time} seconds")
 

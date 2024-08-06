@@ -142,7 +142,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
 pref_comparisons = preference_comparisons.PreferenceComparisons(
     trajectory_generator,
     reward_net,
-    num_iterations=5,  # Set to 60 for better performance
+    num_iterations=10,  # Set to 60 for better performance
     fragmenter=fragmenter,
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
@@ -151,12 +151,13 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     initial_comparison_frac=0.1,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
-    query_schedule="hyperbolic",
+    query_schedule="constant",
 )
 
 pref_comparisons.train(
     total_timesteps=total_timesteps,
     total_comparisons=total_comparisons,
+    tb_log_name='pairwise_comparison',
 )
 
 from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
@@ -189,7 +190,7 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save('rlhf_hopper')
+learner.save('rlhf_pairwise_' + chosen_environment_short_name)
 
 from gymnasium.wrappers import RecordVideo
 

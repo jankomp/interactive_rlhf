@@ -18,12 +18,12 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
 total_comparisons = 500
-max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
-fragment_length = 200 # make sure that max_episode_steps is divisible by fragment_length
+max_episode_steps = 200 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
-gravity = -5
+gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 200_000
+final_training_timesteps = 100_000
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -150,7 +150,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
 pref_comparisons = preference_comparisons.PreferenceComparisons(
     trajectory_generator,
     reward_net,
-    num_iterations=5,  # Set to 60 for better performance
+    num_iterations=10,  # Set to 60 for better performance
     fragmenter=fragmenter,
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
@@ -159,7 +159,8 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     initial_comparison_frac=0.1,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
-    query_schedule="hyperbolic",
+    query_schedule="constant",
+    tb_log_name='groupwise_comparison',
 )
 
 pref_comparisons.train(
@@ -198,7 +199,7 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save('rlhf_' + chosen_environment_short_name)
+learner.save('rlhf_group_wise' + chosen_environment_short_name)
 
 from gymnasium.wrappers import RecordVideo
 
