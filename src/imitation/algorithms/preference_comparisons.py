@@ -2986,11 +2986,28 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
 
             self.logger.dump(self._iteration)
 
+            
+
             ########################
             # Additional Callbacks #
             ########################
             if callback:
                 callback(self._iteration)
             self._iteration += 1
+
+            #safe highlight video
+            from gymnasium.wrappers import RecordVideo
+            import gymnasium as gym
+            env = gym.make('Hopper-v4.1', render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
+            env.model.opt.gravity[2] = -9.81
+            algo = self.trajectory_generator.algorithm
+            env = RecordVideo(env, './highlight_videos', name_prefix='Hopper', episode_trigger=lambda x: x % 1 == 0)
+            # Run the model in the environment
+            obs, info = env.reset()
+            for _ in range(1000):
+                action, _states = algo.predict(obs, deterministic=True)
+                obs, reward, _ ,done, info = env.step(action)
+                if done:
+                    obs, info = env.reset()
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
