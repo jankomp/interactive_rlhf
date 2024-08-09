@@ -1219,6 +1219,7 @@ class SyntheticGatherer(PreferenceGatherer):
         rng: Optional[np.random.Generator] = None,
         threshold: float = 50,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        std_dev: float = 0.1,
     ) -> None:
         """Initialize the synthetic preference gatherer.
 
@@ -1251,13 +1252,27 @@ class SyntheticGatherer(PreferenceGatherer):
         self.sample = sample
         self.rng = rng
         self.threshold = threshold
+        self.std_dev = std_dev
 
         if self.sample and self.rng is None:
             raise ValueError("If `sample` is True, then `rng` must be provided.")
 
+    # Function to apply Gaussian noise
+    def apply_gaussian_noise(self, true_reward, std_dev=0.1):
+        """
+        Apply Gaussian noise to true rewards.
+        :param true_rewards: array of true rewards
+        :param std_dev: standard deviation of the Gaussian noise
+        :return: array of perceived rewards with noise
+        """
+        noise = np.random.normal(0, std_dev)
+        perceived_reward = true_reward + noise
+        return perceived_reward
+
     def __call__(self, fragment_pairs: Sequence[TrajectoryWithRewPair]) -> np.ndarray:
         """Computes probability fragment 1 is preferred over fragment 2."""
-        returns1, returns2 = self._reward_sums(fragment_pairs)
+        returns1, returns2 = self._noisy_reward_sums(fragment_pairs, self.std_dev)
+        
         if self.temperature == 0:
             return (np.sign(returns1 - returns2) + 1) / 2
 
@@ -1283,13 +1298,14 @@ class SyntheticGatherer(PreferenceGatherer):
             return self.rng.binomial(n=1, p=model_probs).astype(np.float32)
         return model_probs
 
-    def _reward_sums(self, fragment_pairs) -> Tuple[np.ndarray, np.ndarray]:
+    def _noisy_reward_sums(self, fragment_pairs, std_dev) -> Tuple[np.ndarray, np.ndarray]:
         rews1, rews2 = zip(
             *[
                 (
-                    rollout.discounted_sum(f1.rews, self.discount_factor),
-                    rollout.discounted_sum(f2.rews, self.discount_factor),
-                )
+                # Apply Gaussian noise to each reward before computing the discounted sum
+                rollout.discounted_sum(self.apply_gaussian_noise(f1.rews, std_dev), self.discount_factor),
+                rollout.discounted_sum(self.apply_gaussian_noise(f2.rews, std_dev), self.discount_factor),
+            )
                 for f1, f2 in fragment_pairs
             ],
         )
@@ -1472,149 +1488,366 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         self,
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        discount_factor: float = 1,
         augment_to_group_size = 10,
+        use_active_learning = False,
+        std_dev = 0.1,
+        preference_model: Optional[PreferenceModel] = None,
     ) -> None:
         super().__init__(rng=rng, custom_logger=custom_logger)
         self.augment_to_group_size = augment_to_group_size
-    
-    def convert_to_low_dimensional_data(self, high_dimensional_data, fragment_length, n_trajectory_components, reduce_to):
-        def dtw_distance(t1, t2):
-            # https://pypi.org/project/fastdtw/
-            # FastDTW: Toward accurate dynamic time warping in linear time and space.” Intelligent Data Analysis 
-            # x = np.array(x)
-            # y = np.array(y)
-            t1 = t1.reshape((fragment_length, n_trajectory_components))
-            t2 = t2.reshape((fragment_length, n_trajectory_components))
-            distance, _ = fastdtw(t1, t2, dist=euclidean)
-            return distance
+        self.discount_factor = discount_factor
+        self.use_active_learning = use_active_learning
+        self.std_dev = std_dev
+        self.preference_model = preference_model
 
-        tsne = TSNE(n_components=reduce_to, perplexity=4, metric=dtw_distance)
-        low_dimensional_data = tsne.fit_transform(high_dimensional_data)
-        return low_dimensional_data
+    def check_overlap(self, group1, group2, reward_border):
+        """
+        Check if groups have significant overlap.
+        :param group1: array of perceived rewards for group 1
+        :param group2: array of perceived rewards for group 2
+        :param reward_border: the mean of the average rewards of the two groups
+        :return: boolean indicating if there is significant overlap
+        """
+        # Determine which group is smaller on average
+        average_group1 = sum(group1) / len(group1)
+        average_group2 = sum(group2) / len(group2)
+
+        if average_group1 < average_group2:
+            overlap_group1 = [reward for reward in group1 if reward > reward_border]
+            overlap_group2 = [reward for reward in group2 if reward < reward_border]
+        else:
+            overlap_group1 = [reward for reward in group1 if reward < reward_border]
+            overlap_group2 = [reward for reward in group2 if reward > reward_border]
+
+        if len(overlap_group1) > len(group1) / 2 or len(overlap_group2) > len(group2) / 2:
+            #print(f'discard groups: group1 {len(group1)} overlap {len(overlap_group1)} group2 {len(group2)} overlap {len(overlap_group2)}')
+            return True
+        #print('rate groups')
+        return False
+        
+    def simulate_user_decision(self, group1, group2, std_dev=0.1):
+        perceived_rewards_group1 = [self._noisy_reward_sums(fragment, std_dev) for fragment in group1]
+        perceived_rewards_group2 = [self._noisy_reward_sums(fragment, std_dev) for fragment in group2]
+        #print('perceived_rewards_group1', perceived_rewards_group1)
+        #print('perceived_rewards_group2', perceived_rewards_group2)
+
+        group1_size = len(group1)
+        group2_size = len(group2)
+        #perform cleaning before making a decision
+        average_reward_group1 = np.mean(perceived_rewards_group1)
+        average_reward_group2 = np.mean(perceived_rewards_group2)
+        groups_reward_border = (average_reward_group1 + average_reward_group2) / 2
+        #print('average_reward_group1', average_reward_group1)
+        #print('average_reward_group2', average_reward_group2)
+        #print('reward_border', groups_reward_border)
+        if self.check_overlap(perceived_rewards_group1, perceived_rewards_group2, groups_reward_border):
+            group1 = []
+            group2 = []
+            decision = 0.5
+            decision_text = "discard_groups"
+        else:
+            if average_reward_group1 > average_reward_group2:
+                group1 = [fragment for fragment, reward in zip(group1, perceived_rewards_group1) if reward >= groups_reward_border]
+                group2 = [fragment for fragment, reward in zip(group2, perceived_rewards_group2) if reward <= groups_reward_border]
+                decision = 1.0
+            else:
+                group1 = [fragment for fragment, reward in zip(group1, perceived_rewards_group1) if reward <= groups_reward_border]
+                group2 = [fragment for fragment, reward in zip(group2, perceived_rewards_group2) if reward >= groups_reward_border]
+                decision = 0.0
+            if group1_size != len(group1) or group2_size != len(group2):
+                decision_text = 'clean_groups'
+            else:
+                decision_text = 'perform_feedback'
+
     
-    def dimensional_reduction(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
-        """Reduce the dimensionality of the fragments. Return id, x, y, video_path of the fragments"""
-        n_components = 2
+        return group1, group2, decision, decision_text
+    
+    def _noisy_reward_sums(self, fragment, std_dev) -> np.ndarray:
+        #print(f"real_reward {rollout.discounted_sum(fragment.rews, self.discount_factor)}")
+        # Add Gaussian noise to each reward
+        noisy_rewards = fragment.rews + np.random.normal(0, std_dev, size=len(fragment.rews))
+        #print(f"noisy_reward {rollout.discounted_sum(noisy_rewards, self.discount_factor)}")
+        return rollout.discounted_sum(noisy_rewards, self.discount_factor)
+    
+    def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
         n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
-        # Convert fragments to fragments_data
         fragments_data = []
         for fragment in fragments:
             fragment_data = np.concatenate([np.array(list(fragment.obs[i]) + list(fragment.acts[i])) for i in range(fragment_length)])
             fragments_data.append(fragment_data)
         fragments_data = np.array(fragments_data)
 
-        low_dimensional_data = self.convert_to_low_dimensional_data(fragments_data, fragment_length, n_trajectory_components, n_components)
+        def dtw_distance(t1, t2):
+            t1 = t1.reshape((fragment_length, n_trajectory_components))
+            t2 = t2.reshape((fragment_length, n_trajectory_components))
+            distance, _ = fastdtw(t1, t2, dist=euclidean)
+            return distance
 
-        fragments_with_id = [{'id': id, 'x': float(x), 'y': float(y), 'reward': fragment.rews.sum()} 
-                         for id, (x, y), fragment in zip(range(len(fragments)), low_dimensional_data, fragments)]
+        # Compute the distance matrix using DTW
+        dist_matrix = squareform(pdist(fragments_data, dtw_distance))
 
-        return fragments_with_id
+        # Perform hierarchical clustering
+        clustering = AgglomerativeClustering(metric='precomputed', linkage='complete', compute_distances=True).fit(dist_matrix)
+
+        # Convert the children_ attribute to a tree structure
+        tree = self.children_to_tree(clustering.children_, clustering.distances_, fragments, 4)
+
+        return tree
     
+    def children_to_tree(self, children, distances, fragments, n_levels):
+        nodes = [{"id": i, "level": 0} for i, _ in enumerate(fragments)]
 
+        for i, (left_child, right_child) in enumerate(children):
+            distance = distances[i]
+            level = next((l for l, level_distance in enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1) if distance < level_distance), n_levels)
+            node = {"id": len(nodes), "level": level, "children": [nodes[left_child], nodes[right_child]]}
+            nodes.append(node)
 
-    def get_group_preferences(self, dimensionally_reduced_fragments, num_pairs: int):
+        root = nodes[-1]
+        root = self.convert_to_non_binary_tree(nodes)
+
+        return root
+
+    def convert_to_non_binary_tree(self, nodes):   
+        # Sort nodes by level in ascending order
+        nodes.sort(key=lambda node: node["level"])
+        nodes_copy = nodes.copy()
+        for node in nodes_copy:
+            parent = None
+            for potential_parent in nodes:
+                if 'children' in potential_parent and node in potential_parent['children']:
+                    parent = potential_parent
+                    break
+
+            if parent is not None:
+                node['parent'] = parent
+                if parent["level"] == node["level"]:
+                    index = parent["children"].index(node)
+                    # Replace the current node with its children while maintaining the order of the other children
+                    parent["children"] = parent["children"][:index] + node["children"] + parent["children"][index+1:]
+                    nodes.remove(node)
+                else:
+                    current_level = node["level"]
+                    while parent["level"] - 1 > current_level:
+                        current_level += 1
+                        # Insert a new node at the missing level
+                        new_node = {"id": len(nodes), "children": [node], "level": current_level, "parent": parent}
+                        # Replace the reference to node in parent's children with the reference to the new node
+                        parent["children"] = [new_node if child is node else child for child in parent["children"]]
+                        nodes.append(new_node)
+                        node = new_node
+
         
-        group_preferences = []
-        trajectories_in_comparisons = 0
-        X = np.array([[fragment['x'], fragment['y']] for fragment in dimensionally_reduced_fragments])
+        nodes.sort(key=lambda node: node["level"])
+        root = nodes[-1]
 
-        # Normalize the data
-        X = StandardScaler().fit_transform(X)
+        return root
 
-        eps = 0.15
-        min_samples = 3
-        db = DBSCAN(eps=eps, min_samples=min_samples).fit(X)
-        labels = db.labels_
-        n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+    def get_active_learning_suggestions(self, fragments: Sequence[TrajectoryWithRew]) -> Sequence[TrajectoryWithRewPair]:
+        # Generate all possible pairs with their ids
+        fragment_pairs = list(itertools.combinations(enumerate(fragments), 2))
 
-        # Split the fragments into groups based on the cluster labels
-        groups = [[] for _ in range(n_clusters_)]
-        for i, label in enumerate(labels):
-            if label != -1:  # Ignore noise
-                groups[label].append(dimensionally_reduced_fragments[i])
+        id_variance_pairs = []
+        for fragment_pair in fragment_pairs:
+            (id1, frag1), (id2, frag2) = fragment_pair
+            trans1 = rollout.flatten_trajectories([frag1])
+            trans2 = rollout.flatten_trajectories([frag2])
+            with th.no_grad():
+                rews1 = self.preference_model.rewards(trans1)
+                rews2 = self.preference_model.rewards(trans2)
+            # always calculate the uncertainty on logit
+            returns1, returns2 = rews1.sum(0), rews2.sum(0)
+            var_estimate = (returns1 - returns2).var().item()
+            id_variance_pairs.append({"id1": id1, "id2": id2, "var": var_estimate})
 
-        print(f"DBSCAN found {n_clusters_} clusters. {len(groups)} groups were created.")
+        # Sort the pairs by variance in descending order
+        id_variance_pairs.sort(key=lambda x: x["var"], reverse=True)
+         # Return the first num_pairs elements
+        #return id_variance_pairs[:num_pairs]
+        return id_variance_pairs
+    
+    def build_parent_map(self, node, parent_map=None):
+        if parent_map is None:
+            parent_map = {}
 
-        #TODO: for now the noise is ignored. should we treat each noise fragment as a separate group instead?
-        
-        completed_group_comparisons = 0
-        # Generate group comparisons
-        while trajectories_in_comparisons < num_pairs:
-            # Pick two random groups
-            group1 = random.choice(groups)
-            group2 = random.choice(groups)
-            while group1 == group2:
-                group2 = random.choice(groups)
+        node_id = node['id']
 
-            print(f"Before cleaning: Group 1 has {len(group1)} fragments, Group 2 has {len(group2)} fragments")
-            # Calculate the average true rewards for each group
-            true_reward_group1 = sum(fragment['reward'] for fragment in group1) / len(group1)
-            true_reward_group2 = sum(fragment['reward'] for fragment in group2) / len(group2)
-            print(f"Group 1 has an average reward of {true_reward_group1}, Group 2 has an average reward of {true_reward_group2}")
+        children = node.get('children', [])
+        for child in children:
+            child_id = child['id']
+            parent_map[child_id] = node_id
+            self.build_parent_map(child, parent_map)
 
-            groups_reward_border = (true_reward_group1 + true_reward_group2) / 2
-            print(f"Groups reward border is {groups_reward_border}")
+        if node_id not in parent_map:
+            parent_map[node_id] = None
 
-            # discard the members of the unpreferred group with rewards that are larger than groups_reward_border, and members of the preferred group with rewards that are smaller than groups_reward_border
-            if true_reward_group1 < true_reward_group2:
-                group1 = [fragment['id'] for fragment in group1 if fragment['reward'] < groups_reward_border]
-                group2 = [fragment['id'] for fragment in group2 if fragment['reward'] > groups_reward_border]
-            else:
-                group1 = [fragment['id'] for fragment in group1 if fragment['reward'] > groups_reward_border]
-                group2 = [fragment['id'] for fragment in group2 if fragment['reward'] < groups_reward_border]
+        return parent_map
 
-            print(f"Group 1 has {len(group1)} fragments, Group 2 has {len(group2)} fragments")
+    def build_child_map(self, node, child_map=None):
+        if child_map is None:
+            child_map = {}
 
-            # this should never actually happen, if it does there is a bug in the code
-            if len(group1) == 0 or len(group2) == 0:
-                continue
+        node_id = node['id']
 
-            # Determine the preference based on the true rewards
-            if true_reward_group1 > true_reward_group2:
-                preference = 1.0
-            elif true_reward_group1 < true_reward_group2:
-                preference = 0.0
-            else:
-                preference = 0.5
+        children = node.get('children', [])
+        child_map[node_id] = [child['id'] for child in children]
+        for child in children:
+            self.build_child_map(child, child_map)
 
-            group_preferences.append({
-                'group1': group1,
-                'group2': group2,
-                'preference': preference
-            })
-            completed_group_comparisons += 1
-            trajectories_in_comparisons += len(group1) + len(group2)
+        if node_id not in child_map:
+            child_map[node_id] = []
 
-        print(f"The system did {completed_group_comparisons} group comparisons.")
-        print(f"This amounts to a total of {trajectories_in_comparisons} trajectories in comparisons")
+        return child_map
+            
+    def get_leaf_descendants(self, node_id, child_map, descendants=None):
+        if descendants is None:
+            descendants = []
 
-        return group_preferences
+        for child_id in child_map[node_id]:
+            if child_map[child_id]:  # if the child has children
+                descendants.extend(self.get_leaf_descendants(child_id, child_map))
+            else:  # if the child is a leaf
+                if child_id not in descendants:
+                    descendants.append(child_id)
+        return descendants
+    
+    def print_tree(self, node, level=0):
+        print('  ' * level + str(node['id']))
+        for child in node.get('children', []):
+            self.print_tree(child, level + 1)
+
+    def sample_group(self, leaf_nodes, starting_id, max_group_size):
+        group1_size = self.rng.randint(1, max_group_size)
+        group1_center = starting_id
+        return leaf_nodes[group1_center - math.floor(group1_size/2): group1_center + math.ceil(group1_size/2)]
+
+    def create_feedbacks_from_groups(self, group1, group2, preference):
+        # Repeat the smaller group to match the size of the larger group
+        if len(group1) < len(group2):
+            group1 = group1 * (len(group2) // len(group1)) + group1[:len(group2) % len(group1)]
+        elif len(group2) < len(group1):
+            group2 = group2 * (len(group1) // len(group2)) + group2[:len(group1) % len(group2)]
+
+        # Shuffle the groups
+        random.shuffle(group1)
+        random.shuffle(group2)
+
+        # Match them one to one to create the pairwise feedbacks
+        preferences = []
+        fragments = []
+        for g1, g2 in zip(group1, group2):
+            fragments.append((g1, g2))
+            preferences.append((preference))
+
+        return fragments, preferences
 
     def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
-        dimensionally_reduced_fragments = self.dimensional_reduction(fragments, fragment_length=fragment_length)
+        fragment_tree = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
         
-        comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
+        #print('Printing tree:')
+        #self.print_tree(fragment_tree)
+
+        parent_map = self.build_parent_map(fragment_tree)
+        child_map = self.build_child_map(fragment_tree)
+        #print('Parent map: ', parent_map)
+        #print('\n')
+        #print('Child_map: ', child_map)
+        
+        group_preferences = []
         preferences = []
-        group_preferences = self.get_group_preferences(dimensionally_reduced_fragments, num_pairs)
+
+        sampled_groups = []
+        if self.use_active_learning:
+            # use active learning suggestions to sample two groups from fragment_tree
+            active_learning_suggestions = self.get_active_learning_suggestions(fragments)
+
+            sampled_groups = []
+            #print('group pairs', num_pairs)
+            #print('active learning suggestions', len(active_learning_suggestions))
+            #print('length parent_map?', len(parent_map))
+            #print('length child_map?', len(child_map))
+            for suggestion in active_learning_suggestions:
+                #time.sleep(0.1)
+                #print(suggestion)
+                node1_id = parent_map[suggestion['id1']]
+                node2_id = parent_map[suggestion['id2']]
+                #print(f"parent of {suggestion['id1']} is {node1_id}")
+                #print(f"parent of {suggestion['id2']} is {node2_id}")
+                if node1_id == node2_id:
+                    continue
+
+                group1_ids = self.get_leaf_descendants(node1_id, child_map)
+                if len(group1_ids) == 1:
+                    node1_id = parent_map[node1_id]
+                    group1_ids = self.get_leaf_descendants(node1_id, child_map)
+
+                group2_ids = self.get_leaf_descendants(node2_id, child_map)
+                if len(group2_ids) == 1:
+                    node2_id = parent_map[node2_id]
+                    group2_ids = self.get_leaf_descendants(node2_id, child_map)
+
+                if set(group1_ids) & set(group2_ids):
+                    #print('same ids', group1_ids, group2_ids)
+                    continue
+
+                group1 = [fragments[node_id] for node_id in group1_ids]
+                group2 = [fragments[node_id] for node_id in group2_ids]
+                sampled_groups.append((group1, group2))
+                
+            #print('sampled_fragments', len(sampled_groups))
+        else:
+            # pick two groups from the lowest two non leaf node levels of the tree at random until we sampled as many pairs as needed
+            non_leaf_nodes = [node[id] for node in fragment_tree if node['children'] is not None and (node['level'] == 1 or node['level'] == 2)]
+            for _ in range(num_pairs):
+                node1_id = self.rng.choice(non_leaf_nodes)
+                node2_id = self.rng.choice(non_leaf_nodes)
+                if node1_id == node2_id:
+                    continue
+                group1_ids = self.get_leaf_descendants(node1_id, child_map)
+                group2_ids = self.get_leaf_descendants(node2_id, child_map)
+
+                group1 = [fragments[node_id] for node_id in group1_ids]
+                group2 = [fragments[node_id] for node_id in group2_ids]
+                sampled_groups.append((group1, group2))
+            #print('sampled_fragments', len(sampled_groups))
+
+        #print('simulating user decisions', len(sampled_groups))
+        decision_counts = {
+            'perform_feedback': 0,
+            'discard_groups': 0,
+            'clean_groups': 0
+        }
+        feedback_counter = 0
+        for group1, group2 in sampled_groups:
+            group1, group2, preference, decision = self.simulate_user_decision(group1, group2, self.std_dev)
+            decision_counts[decision] += 1
+            if len(group1) != 0 and len(group2) != 0:
+                group_preferences.append({
+                    'group1': group1,
+                    'group2': group2,
+                    'preference': preference
+                })
+            feedback_counter += max(len(group1), len(group2))
+            if feedback_counter >= num_pairs:
+                break
+
+        print('group_preferences', len(group_preferences))
         for group_preference in group_preferences:
             group1 = group_preference['group1']
             group2 = group_preference['group2']
             preference = group_preference['preference']
 
-            # If the product of the group sizes is less than 100, augment the smaller group
-            while len(group1) * len(group2) < comparisons_goal:
-                if len(group1) < len(group2):
-                    group1 += random.choices(group1, k=1)
-                else:
-                    group2 += random.choices(group2, k=1)
+            new_fragment_pairs, new_preferences = self.create_feedbacks_from_groups(group1, group2, preference)
+            
+            fragment_pairs.extend(new_fragment_pairs)
+            preferences.extend(new_preferences)
 
-            for i in group1:
-                for j in group2:
-                    fragment_pair = (fragments[i], fragments[j])
-                    fragment_pairs.append(fragment_pair)
-                    preferences.append(preference)
+        print("\nDecision counts:")
+        for decision, count in decision_counts.items():
+            print(f"{decision}: {count}")
             
         print(f"Generated {len(preferences)} preferences")
         return fragment_pairs, np.array(preferences, dtype=np.float32)
@@ -2698,6 +2931,12 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                     fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
                     end_time = time.time()
                     self.logger.log(f"Preference gathering took {end_time - start_time} seconds")
+            elif isinstance(self.preference_gatherer, SyntheticGatherer):
+                self.logger.log("Creating fragment pairs")
+                fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
+                with self.logger.accumulate_means("preferences"):
+                    self.logger.log("Gathering preferences")
+                    preferences = self.preference_gatherer(fragments)
             else:            
                 self.logger.log("Creating fragment pairs")
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
