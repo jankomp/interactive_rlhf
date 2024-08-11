@@ -18,8 +18,9 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
 total_comparisons = 500
+rounds = 5
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
-fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 50 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -4.5
 environment_number = 1 # integer from 0 to 7
@@ -151,7 +152,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
 pref_comparisons = preference_comparisons.PreferenceComparisons(
     trajectory_generator,
     reward_net,
-    num_iterations=1,  # Set to 60 for better performance
+    num_iterations=rounds,  # Set to 60 for better performance
     fragmenter=fragmenter,
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
@@ -160,7 +161,7 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     initial_comparison_frac=0.1,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
-    query_schedule="constant",
+    query_schedule="hyperbolic",
 )
 
 pref_comparisons.train(
@@ -190,18 +191,20 @@ learned_reward_venv = RewardVecEnvWrapper(venv, reward_net.predict_processed)
 #    gamma=0.97,
 #    learning_rate=2e-3,
 #)
-learner = agent
+
 print(f"Training the learner for {final_training_timesteps} timesteps")
-learner.learn(final_training_timesteps)  # Note: set to 100_000 to train a proficient expert
+trajectory_generator.train(final_training_timesteps)  # Note: set to 100_000 to train a proficient expert
 
 from stable_baselines3.common.evaluation import evaluate_policy
 
+learner = trajectory_generator.algorithm
 n_eval_episodes = 100
 reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
 learner.save('rlhf_group_wise' + chosen_environment_short_name)
+print(f"Model saved as rlhf_group_wise{chosen_environment_short_name}")
 
 from gymnasium.wrappers import RecordVideo
 
