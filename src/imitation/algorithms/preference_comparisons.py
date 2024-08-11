@@ -356,7 +356,7 @@ class AgentTrainer(TrajectoryGenerator):
     def logger(self, value: imit_logger.HierarchicalLogger) -> None:
         self._logger = value
         #commented, because we want to save tensorboard logs
-        self.algorithm.set_logger(self.logger)
+        #self.algorithm.set_logger(self.logger)
 
 
 def _get_trajectories(
@@ -1793,9 +1793,11 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
                     #print('same ids', group1_ids, group2_ids)
                     continue
 
-                group1 = [fragments[node_id] for node_id in group1_ids]
-                group2 = [fragments[node_id] for node_id in group2_ids]
-                sampled_groups.append((group1, group2))
+                # we do not want duplicate pairs
+                if (group1_ids, group2_ids) in sampled_groups or (group2_ids, group1_ids) in sampled_groups:
+                    #print('duplicate pair')
+                    continue
+                sampled_groups.append((group1_ids, group2_ids))
                 
             #print('sampled_fragments', len(sampled_groups))
         else:
@@ -1821,7 +1823,9 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             'clean_groups': 0
         }
         feedback_counter = 0
-        for group1, group2 in sampled_groups:
+        for group1_ids, group2_ids in sampled_groups:
+            group1 = [fragments[node_id] for node_id in group1_ids]
+            group2 = [fragments[node_id] for node_id in group2_ids]
             group1, group2, preference, decision = self.simulate_user_decision(group1, group2, self.std_dev)
             decision_counts[decision] += 1
             if len(group1) != 0 and len(group2) != 0:
@@ -1868,14 +1872,14 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app = Flask(__name__)
         CORS(self.app)
         self.feedback_count = 0
-        self.total_feedbacks = total_feedbacks / 5
+        self.total_feedbacks = total_feedbacks
         self.round_feedbacks = 0
         self.timer = TimerThread()
         self.timer.start()
         self.preference_model = preference_model
         self.current_fragments_hash = None
         self.active_learning_suggestions = []
-        self.fragments_with_id = []
+        self.fragments = []
         self.fragments_for_frontend = []
         self.given_preferences_for_frontend = []
         self.queue = Queue() 
@@ -1922,10 +1926,41 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
     
     def post_preference_pairs(self):
         data = request.json
-        self.queue.put(data)
-        #self.feedback_count += (self.augment_to_group_size if len(data['group1']) < self.augment_to_group_size else len(data['group1'])) + (self.augment_to_group_size if len(data['group2']) < self.augment_to_group_size else len(data['group2'])) # replace + with * if we want to count the number of pairs instead of the number of fragments
-        self.feedback_count += 1
-        return jsonify({'feedback_count': self.feedback_count})
+        # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
+        # we create one preference for each possible pair of fragments across the two groups with the value of preference
+        preference = 1.0 if data['preference'] == 'ArrowLeft' else 0.0 if data['preference'] == 'ArrowRight' else 0.5 if data['preference'] == 'ArrowUp' else None
+        if preference is not None and len(data['group1']) > 0 and len(data['group2']) > 0:
+            group1 = data['group1']
+            group2 = data['group2']
+            print('group1', group1)
+            print('group2', group2)
+
+            new_fragment_pair_ids, new_preferences = self.create_feedbacks_from_groups(group1, group2, preference)
+            new_fragment_pairs = [(self.fragments[id1], self.fragments[id2]) for id1, id2 in new_fragment_pair_ids]
+
+        self.queue.put((new_fragment_pairs, new_preferences))
+        self.feedback_count += max(len(group1), len(group2))
+        return jsonify({'feedback_count': self.feedback_count, 'new_fragment_pairs': new_fragment_pair_ids, 'new_preferences': new_preferences})
+    
+    def create_feedbacks_from_groups(self, group1, group2, preference):
+        # Repeat the smaller group to match the size of the larger group
+        if len(group1) < len(group2):
+            group1 = group1 * (len(group2) // len(group1)) + group1[:len(group2) % len(group1)]
+        elif len(group2) < len(group1):
+            group2 = group2 * (len(group1) // len(group2)) + group2[:len(group1) % len(group2)]
+
+        # Shuffle the groups
+        random.shuffle(group1)
+        random.shuffle(group2)
+
+        # Match them one to one to create the pairwise feedbacks
+        pairs = []
+        preferences = []
+        for g1, g2 in zip(group1, group2):
+            pairs.append((g1, g2))
+            preferences.append((preference))
+        
+        return pairs, preferences
     
     def get_feedback_time(self):
         return jsonify({'timeElapsed': self.timer.get_elapsed_time()})
@@ -2045,47 +2080,27 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         fragment_pairs = []
         preferences = []
         self.given_preferences_for_frontend = []
-        self.round_feedbacks += (num_pairs / 5)
+        self.feedback_count = self.round_feedbacks
+        self.round_feedbacks += num_pairs
 
         start_time = time.time()
         if self.preference_model is not None and self.preference_model.ensemble_model is not None:
             self.active_learning_suggestions = self.get_active_learning_suggestions(fragments, num_pairs)
 
+        self.fragments = fragments
         self.fragments_for_frontend = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
         end_time = time.time()
         self.logger.log(f"Hierarchical clustering took {end_time - start_time} seconds")
 
-        comparisons_goal = self.augment_to_group_size * self.augment_to_group_size
-
-        while self.feedback_count < (num_pairs / 5):
-            feedback = self.queue.get()
+        while self.feedback_count < self.round_feedbacks:
+            new_fragment_pairs, new_preferences = self.queue.get()
             self.timer.unblock()
-            # the feedback contains two sequences of indices and a preference (1.0, 0.5, or 0.0)
-            # we create one preference for each possible pair of fragments across the two groups with the value of preference
-            preference = 1.0 if feedback['preference'] == 'ArrowLeft' else 0.0 if feedback['preference'] == 'ArrowRight' else 0.5 if feedback['preference'] == 'ArrowUp' else None
-            if preference is not None and len(feedback['group1']) > 0 and len(feedback['group2']) > 0:
-                group1 = feedback['group1']
-                group2 = feedback['group2']
-
-                # If the product of the group sizes is less than comparison_goal, augment the smaller group
-                while len(group1) * len(group2) < comparisons_goal:
-                    if len(group1) < len(group2):
-                        group1 += random.choices(group1, k=1)
-                    else:
-                        group2 += random.choices(group2, k=1)
-
-                for i in group1:
-                    for j in group2:
-                        fragment_pair = (fragments[i], fragments[j])
-                        fragment_pairs.append(fragment_pair)
-                        preferences.append(preference)
-                        self.given_preferences_for_frontend.append({
-                            'id1': i,
-                            'id2': j,
-                            'preference': preference
-                        })
-            print(f'Feedback count: {self.feedback_count}/{self.round_feedbacks}')
+            
+            fragment_pairs.extend(new_fragment_pairs)
+            preferences.extend(new_preferences)
+            print(f'Preference count: {self.feedback_count - num_pairs}')
+            print(f'Total feedback count: {self.feedback_count}/{self.round_feedbacks}')
             print(f'Preferences: {len(preferences)}')
             print(f'Fragment pairs: {len(fragment_pairs)}')
         self.timer.block()
