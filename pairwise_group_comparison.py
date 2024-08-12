@@ -17,12 +17,12 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
-total_comparisons = 500
+total_comparisons = 200
 rounds = 5
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 50 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
-gravity = -4.5
+gravity = -4
 environment_number = 1 # integer from 0 to 7
 final_training_timesteps = 100_000
 # END: PARAMETERS
@@ -111,24 +111,24 @@ gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(total_feed
 # ppo_lr, exploration_frac, num_iterations, initial_comparison_frac,
 # initial_epoch_multiplier, query_schedule) used in this example have been
 # approximately fine-tuned to reach a reasonable level of performance.
-agent = PPO(
-    policy=FeedForward32Policy,
-    policy_kwargs=dict(
-        features_extractor_class=NormalizeFeaturesExtractor,
-        features_extractor_kwargs=dict(normalize_class=RunningNorm),
-    ),
-    env=venv,
-    seed=0,
-    n_steps=2048 // venv.num_envs,
-    batch_size=64,
-    ent_coef=0.01,
-    learning_rate=2e-3,
-    clip_range=0.1,
-    gae_lambda=0.95,
-    gamma=0.97,
-    n_epochs=10,
-)
-#agent = PPO.load('rlhf_group_wise' + chosen_environment_short_name)
+#agent = PPO(
+#    policy=FeedForward32Policy,
+#    policy_kwargs=dict(
+#        features_extractor_class=NormalizeFeaturesExtractor,
+#        features_extractor_kwargs=dict(normalize_class=RunningNorm),
+#    ),
+#    env=venv,
+#    seed=0,
+#    n_steps=2048 // venv.num_envs,
+#    batch_size=64,
+#    ent_coef=0.01,
+#    learning_rate=2e-3,
+#    clip_range=0.1,
+#    gae_lambda=0.95,
+#    gamma=0.97,
+#    n_epochs=10,
+#)
+agent = PPO.load('rlhf_group_wise' + chosen_environment_short_name)
 
 # Create the logger
 default_logger = Logger('logs', output_formats=['stdout'])
