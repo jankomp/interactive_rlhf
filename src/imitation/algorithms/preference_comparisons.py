@@ -1369,7 +1369,6 @@ class HumanGathererAPI(PreferenceGatherer):
 
     def __init__(
         self,
-        total_feedbacks: int,
         fragmenter: Fragmenter,
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
@@ -1383,8 +1382,9 @@ class HumanGathererAPI(PreferenceGatherer):
         self.feedback_count = 1
         self.timer = TimerThread()
         self.timer.start()
-        self.total_feedbacks = total_feedbacks
-        self.round_feedbacks = 0
+        self.total_feedbacks = 0
+        self.round_time_limit = 0
+        self.timer = None
         self.fragmenter = fragmenter
         self.app.route('/key_press', methods=['POST'])(self.key_press)
         self.app.route('/stream')(self.stream)
@@ -1402,7 +1402,7 @@ class HumanGathererAPI(PreferenceGatherer):
         yield 'data: {}\n\n'.format(json.dumps(self.videos))
 
     def get_total_feedbacks(self):
-        return jsonify({'total_feedbacks': self.total_feedbacks})
+        return jsonify({'given_feedbacks': self.feedback_count, 'total_feedbacks': self.total_feedbacks})
     
     def get_round_feedbacks(self):
         return jsonify({'round_feedbacks': self.round_feedbacks})
@@ -1427,19 +1427,22 @@ class HumanGathererAPI(PreferenceGatherer):
         self.send_videos()
     
     def get_feedback_time(self):
-        return jsonify({'timeElapsed': self.timer.get_elapsed_time()})
+        return jsonify({'timeElapsed': self.timer.get_elapsed_time() if self.timer is not None else 0, 'roundTimeLimit': self.round_time_limit})
     
     def pause_timer(self):
-        self.timer.pause()
-        return jsonify({'message': 'Timer paused', 'timeElapsed': self.timer.get_elapsed_time()})
+        if self.timer is not None:
+            self.timer.pause()
+        return jsonify({'message': 'Timer paused', 'timeElapsed': self.timer.get_elapsed_time() if self.timer is not None else 0, 'roundTimeLimit': self.round_time_limit})
 
     def resume_timer(self):
-        self.timer.resume()
-        return jsonify({'message': 'Timer resumed', 'timeElapsed': self.timer.get_elapsed_time()})       
+        if self.timer is not None:
+            self.timer.resume()
+        return jsonify({'message': 'Timer resumed', 'timeElapsed': self.timer.get_elapsed_time() if self.timer is not None else 0, 'roundTimeLimit': self.round_time_limit}) 
 
     def close(self):
+        if self.timer is not None:
+            self.timer.stop()
         self.server.shutdown()
-        self.timer.stop()
 
     def get_human_feedback(self) -> float:
         key = self.queue.get()
@@ -1454,27 +1457,37 @@ class HumanGathererAPI(PreferenceGatherer):
         else:
             print("Invalid input. Please press 'Left' for left video, 'Right' for right video, 'Up' for tie, 'Down' to skip.")
 
-    def __call__(self, trajectories: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, trajectories: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         preferences = []
         fragment_pairs = []
-        self.round_feedbacks += num_pairs
-        while len(preferences) < num_pairs:
-            fragment_pair = self.fragmenter.get_fragment_pair(trajectories, fragment_length)
-            video_path1 = find_video_file(fragment_pair[0].infos)
-            video_path2 = find_video_file(fragment_pair[1].infos)
-            if video_path1 is None or video_path2 is None:
-                self.logger.log(f"Skipping this pair {len(preferences)} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
-                continue
-            self.display_videos(video_path1, video_path2)
-            feedback = self.get_human_feedback()
-            clear_output(wait=True)
-            if feedback is None:
-                self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
-                continue
-            self.feedback_count += 1
-            preferences.append(feedback)
-            fragment_pairs.append(fragment_pair)
+        self.round_time_limit = round_time_limit
+        # if the round finished without any preferences, we need to query for the feedback again
+        while len(preferences) < 10:
+            fragment_pairs = []
+            preferences = []
+            self.feedback_count = 0
+            self.timer = TimerThread()
+            self.timer.start()
+            self.timer.unblock()
+            while  self.timer.get_elapsed_time() < round_time_limit:
+                fragment_pair = self.fragmenter.get_fragment_pair(trajectories, fragment_length)
+                video_path1 = find_video_file(fragment_pair[0].infos)
+                video_path2 = find_video_file(fragment_pair[1].infos)
+                if video_path1 is None or video_path2 is None:
+                    self.logger.log(f"Skipping this pair {len(preferences)} because one of the video_paths is None. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                    continue
+                self.display_videos(video_path1, video_path2)
+                feedback = self.get_human_feedback()
+                clear_output(wait=True)
+                if feedback is None:
+                    self.logger.log(f"Skipping this comparison. Frag1 path: {video_path1}, Frag2 path: {video_path2}")
+                    continue
+                self.feedback_count += 1
+                self.total_feedbacks += 1
+                preferences.append(feedback)
+                fragment_pairs.append(fragment_pair)
+                print(f'Elapsed time: {self.timer.get_elapsed_time()}/{round_time_limit}')
         self.display_videos('','')
         self.timer.block()
         print(f"Feedback took {self.timer.get_elapsed_time()} seconds in total")
@@ -1861,7 +1874,6 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
     def __init__(
         self,
-        total_feedbacks: int,
         rng: Optional[np.random.Generator] = None,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
         augment_to_group_size = 10,
@@ -1872,10 +1884,9 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app = Flask(__name__)
         CORS(self.app)
         self.feedback_count = 0
-        self.total_feedbacks = total_feedbacks
-        self.round_feedbacks = 0
-        self.timer = TimerThread()
-        self.timer.start()
+        self.total_feedbacks = 0
+        self.round_time_limit = 0
+        self.timer = None
         self.preference_model = preference_model
         self.current_fragments_hash = None
         self.active_learning_suggestions = []
@@ -1890,7 +1901,6 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.app.route('/suggestions')(self.get_suggestions)
         self.app.route('/given_preferences')(self.get_given_preferences)
         self.app.route('/preference', methods=['POST'])(self.post_preference_pairs)
-        self.app.route('/round_feedbacks')(self.get_round_feedbacks)
         self.app.route('/feedback_time')(self.get_feedback_time)
         self.app.route('/pause')(self.pause_timer)
         self.app.route('/resume')(self.resume_timer)
@@ -1899,10 +1909,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.server.start()
 
     def get_total_feedbacks(self):
-        return jsonify({'given_feedbacks': self.feedback_count, 'round_feedbacks': self.round_feedbacks,'total_feedbacks': self.total_feedbacks})
-    
-    def get_round_feedbacks(self):
-        return jsonify({'round_feedbacks': self.round_feedbacks})
+        return jsonify({'given_feedbacks': self.feedback_count, 'total_feedbacks': self.total_feedbacks})
     
     def send_fragment_hash(self):
         yield 'data: {}\n\n'.format(json.dumps(self.current_fragments_hash))
@@ -1940,6 +1947,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
 
         self.queue.put((new_fragment_pairs, new_preferences))
         self.feedback_count += max(len(group1), len(group2))
+        self.total_feedbacks += max(len(group1), len(group2))
         return jsonify({'feedback_count': self.feedback_count, 'new_fragment_pairs': new_fragment_pair_ids, 'new_preferences': new_preferences})
     
     def create_feedbacks_from_groups(self, group1, group2, preference):
@@ -1961,20 +1969,23 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             preferences.append((preference))
         
         return pairs, preferences
-    
+        
     def get_feedback_time(self):
-        return jsonify({'timeElapsed': self.timer.get_elapsed_time()})
+        return jsonify({'timeElapsed': self.timer.get_elapsed_time() if self.timer is not None else 0, 'roundTimeLimit': self.round_time_limit})
     
     def pause_timer(self):
-        self.timer.pause()
-        return jsonify({'message': 'Timer paused', 'timeElapsed': self.timer.get_elapsed_time()})
+        if self.timer is not None:
+            self.timer.pause()
+        return jsonify({'message': 'Timer paused', 'timeElapsed': self.timer.get_elapsed_time() if self.timer is not None else 0, 'roundTimeLimit': self.round_time_limit})
 
     def resume_timer(self):
-        self.timer.resume()
-        return jsonify({'message': 'Timer resumed', 'timeElapsed': self.timer.get_elapsed_time()}) 
+        if self.timer is not None:
+            self.timer.resume()
+        return jsonify({'message': 'Timer resumed', 'timeElapsed': self.timer.get_elapsed_time() if self.timer is not None else 0, 'roundTimeLimit': self.round_time_limit}) 
 
     def close(self):
-        self.timer.stop()
+        if self.timer is not None:
+            self.timer.stop()
         self.server.shutdown()
 
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
@@ -2075,13 +2086,12 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return id_variance_pairs
 
 
-    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         preferences = []
         self.given_preferences_for_frontend = []
-        self.feedback_count = self.round_feedbacks
-        self.round_feedbacks += num_pairs
+        self.round_time_limit = round_time_limit
 
         start_time = time.time()
         if self.preference_model is not None and self.preference_model.ensemble_model is not None:
@@ -2093,18 +2103,27 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         end_time = time.time()
         self.logger.log(f"Hierarchical clustering took {end_time - start_time} seconds")
 
-        while self.feedback_count < self.round_feedbacks:
-            new_fragment_pairs, new_preferences = self.queue.get()
+        # if the round finished without any preferences, we need to query for the feedback again
+        while len(preferences) < 10:
+            fragment_pairs = []
+            preferences = []
+            self.feedback_count = 0
+            self.timer = TimerThread()
+            self.timer.start()
             self.timer.unblock()
-            
-            fragment_pairs.extend(new_fragment_pairs)
-            preferences.extend(new_preferences)
-            print(f'Preference count: {self.feedback_count - num_pairs}')
-            print(f'Total feedback count: {self.feedback_count}/{self.round_feedbacks}')
-            print(f'Preferences: {len(preferences)}')
-            print(f'Fragment pairs: {len(fragment_pairs)}')
-        self.timer.block()
-        self.logger.log(f"Feedback took {self.timer.get_elapsed_time()} seconds in total")
+            while  self.timer.get_elapsed_time() < round_time_limit:
+                new_fragment_pairs, new_preferences = self.queue.get()
+                self.timer.unblock()
+                
+                fragment_pairs.extend(new_fragment_pairs)
+                preferences.extend(new_preferences)
+                print(f'Preference count: {self.feedback_count - num_pairs}')
+                print(f'Total feedback count: {self.feedback_count}/{self.total_feedbacks}')
+                print(f'Preferences: {len(preferences)}')
+                print(f'Fragment pairs: {len(fragment_pairs)}')
+                print(f'Elapsed time: {self.timer.get_elapsed_time()}/{round_time_limit}')
+            self.timer.block()
+            self.logger.log(f"Feedback took {self.timer.get_elapsed_time()} seconds in total")
 
         self.current_fragments_hash = None
         return fragment_pairs, np.array(preferences, dtype=np.float32)
@@ -2933,7 +2952,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if isinstance(self.preference_gatherer, HumanGathererAPI):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs)
+                    fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*6)
             elif isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter):
                 self.logger.log("Creating fragment pairs")
                 num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
@@ -2943,7 +2962,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
                     start_time = time.time()
-                    fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
+                    fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs, round_time_limit=num_pairs*6)
                     end_time = time.time()
                     self.logger.log(f"Preference gathering took {end_time - start_time} seconds")
             elif isinstance(self.preference_gatherer, SyntheticGatherer):

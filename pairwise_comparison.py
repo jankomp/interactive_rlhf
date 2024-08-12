@@ -15,8 +15,9 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
-total_comparisons = 500
-max_episode_steps = 200 # make sure that max_episode_steps is divisible by fragment_length
+total_comparisons = 180
+rounds = 5
+max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
@@ -102,7 +103,7 @@ fragmenter = preference_comparisons.ActiveSelectionFragmenter(
 )
 
 #gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGathererAPI(rng=rng, total_feedbacks=total_comparisons, fragmenter=fragmenter)
+gatherer = preference_comparisons.HumanGathererAPI(rng=rng, fragmenter=fragmenter)
 
 # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
 # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,
@@ -142,7 +143,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
 pref_comparisons = preference_comparisons.PreferenceComparisons(
     trajectory_generator,
     reward_net,
-    num_iterations=10,  # Set to 60 for better performance
+    num_iterations=rounds,  # Set to 60 for better performance
     fragmenter=fragmenter,
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,

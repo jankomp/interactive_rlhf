@@ -17,12 +17,12 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
-total_comparisons = 500
+total_comparisons = 180
 rounds = 5
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
-fragment_length = 50 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
-gravity = -4.5
+gravity = -9.81
 environment_number = 1 # integer from 0 to 7
 final_training_timesteps = 100_000
 # END: PARAMETERS
@@ -104,7 +104,7 @@ fragmenter = preference_comparisons.AbsoluteUncertaintyFragmenter(
 )
 
 #gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(total_feedbacks=total_comparisons, rng=rng, augment_to_group_size=1, preference_model=preference_model,)
+gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(rng=rng, augment_to_group_size=1, preference_model=preference_model,)
 
 # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
 # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,
@@ -161,7 +161,7 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     initial_comparison_frac=0.1,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
-    query_schedule="hyperbolic",
+    query_schedule="constant",
 )
 
 pref_comparisons.train(
