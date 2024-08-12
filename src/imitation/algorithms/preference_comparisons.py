@@ -80,6 +80,10 @@ from scipy.spatial.distance import pdist, squareform
 
 from scipy.spatial.distance import euclidean
 
+from gymnasium.wrappers import RecordVideo
+import gymnasium as gym
+        
+
 class TrajectoryGenerator(abc.ABC):
     """Generator of trajectories with optional training logic."""
 
@@ -2888,6 +2892,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         )
         reward_loss = None
         reward_accuracy = None
+         
+        self.create_highlight_video()
 
         for i, num_pairs in enumerate(schedule):
             ##########################
@@ -2986,28 +2992,32 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
 
             self.logger.dump(self._iteration)
 
-            
-
             ########################
             # Additional Callbacks #
             ########################
             if callback:
                 callback(self._iteration)
             self._iteration += 1
-
-            #safe highlight video
-            from gymnasium.wrappers import RecordVideo
-            import gymnasium as gym
-            env = gym.make('Hopper-v4.1', render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
-            env.model.opt.gravity[2] = -9.81
-            algo = self.trajectory_generator.algorithm
-            env = RecordVideo(env, './highlight_videos', name_prefix='Hopper', episode_trigger=lambda x: x % 1 == 0)
-            # Run the model in the environment
-            obs, info = env.reset()
-            for _ in range(1000):
-                action, _states = algo.predict(obs, deterministic=True)
-                obs, reward, _ ,done, info = env.step(action)
-                if done:
-                    obs, info = env.reset()
+            
+            self.create_highlight_video()
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
+
+    def create_highlight_video(self) -> None:
+
+        algo = self.trajectory_generator.algorithm
+        id = algo.get_env().envs[0].unwrapped.spec.id
+        prefix = id.split('-v')[0]
+        
+        env = gym.make(id, render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
+        env.model.opt.gravity[2] = algo.get_env().envs[0].model.opt.gravity[2]
+        
+        env = RecordVideo(env, './highlight_videos', name_prefix=prefix, episode_trigger=lambda x: x % 1 == 0)
+        
+        obs, info = env.reset()
+        for _ in range(1000):
+            action, _states = algo.predict(obs, deterministic=True)
+            obs, reward, _ ,done, info = env.step(action)
+            if done:
+                obs, info = env.reset()
+
