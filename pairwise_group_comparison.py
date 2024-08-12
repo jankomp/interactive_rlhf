@@ -17,7 +17,7 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
-total_comparisons = 180
+total_comparisons = 300
 rounds = 5
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length

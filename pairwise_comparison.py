@@ -15,13 +15,14 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 
 # BEGIN: PARAMETERS
 total_timesteps = 100_000
-total_comparisons = 180
+total_comparisons = 300
 rounds = 5
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
+final_training_timesteps = 100_000
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -45,18 +46,18 @@ def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
             video_length=fragment_length,
             name_prefix=f'rl-video-env-{i}',
             timeline=True,
-            every_nth_timestep=3,
+            every_nth_timestep=every_n_frames,
         )
     else:
         return env
     
 venv = make_vec_env(
-    "Hopper-v4.1",
+    chosen_environment,
     rng=rng,
     render_mode='rgb_array',
     n_envs=8,
     max_episode_steps=max_episode_steps,
-    env_make_kwargs={'terminate_when_unhealthy': False},
+    env_make_kwargs=env_make_kwargs,
     gravity=gravity,
     post_wrappers=[video_recorder_wrapper],
 )
@@ -165,38 +166,41 @@ from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
 
 learned_reward_venv = RewardVecEnvWrapper(venv, reward_net.predict_processed)
 
-learner = PPO(
-    seed=0,
-    policy=FeedForward32Policy,
-    policy_kwargs=dict(
-        features_extractor_class=NormalizeFeaturesExtractor,
-        features_extractor_kwargs=dict(normalize_class=RunningNorm),
-    ),
-    env=learned_reward_venv,
-    batch_size=64,
-    ent_coef=0.01,
-    n_epochs=10,
-    n_steps=2048 // learned_reward_venv.num_envs,
-    clip_range=0.1,
-    gae_lambda=0.95,
-    gamma=0.97,
-    learning_rate=2e-3,
-)
-learner.learn(100_000)  # Note: set to 100_000 to train a proficient expert
+#learner = PPO(
+#    seed=0,
+#    policy=FeedForward32Policy,
+#    policy_kwargs=dict(
+#        features_extractor_class=NormalizeFeaturesExtractor,
+#        features_extractor_kwargs=dict(normalize_class=RunningNorm),
+#    ),
+#    env=learned_reward_venv,
+#    batch_size=64,
+#    ent_coef=0.01,
+#    n_epochs=10,
+#    n_steps=2048 // learned_reward_venv.num_envs,
+#    clip_range=0.1,
+#    gae_lambda=0.95,
+#    gamma=0.97,
+#    learning_rate=2e-3,
+#)
+print(f"Training the learner for {final_training_timesteps} timesteps")
+trajectory_generator.train(final_training_timesteps)  # Note: set to 100_000 to train a proficient expert
 
 from stable_baselines3.common.evaluation import evaluate_policy
 
+learner = trajectory_generator.algorithm
 n_eval_episodes = 100
 reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
 learner.save('rlhf_pairwise_' + chosen_environment_short_name)
+print(f"Model saved as rlhf_pairwise{chosen_environment_short_name}")
 
 from gymnasium.wrappers import RecordVideo
 
 # Create the environment
-env = gym.make("Hopper-v4", render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
+env = gym.make(chosen_environment, render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
 env.model.opt.gravity[2] = gravity
 env = RecordVideo(env, './evaluation_videos', name_prefix="hopper", episode_trigger=lambda x: x % 1 == 0) 
 # Run the model in the environment
