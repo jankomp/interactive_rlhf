@@ -14,6 +14,7 @@ import pickle
 import re
 import itertools
 from collections import defaultdict
+from collections import Counter
 from typing import (
     Any,
     Callable,
@@ -1657,28 +1658,106 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         return root
 
-    def get_active_learning_suggestions(self, fragments: Sequence[TrajectoryWithRew]) -> Sequence[TrajectoryWithRewPair]:
-        # Generate all possible pairs with their ids
-        fragment_pairs = list(itertools.combinations(enumerate(fragments), 2))
+    def get_active_learning_suggestions(self, child_map, parents, fragments: Sequence[TrajectoryWithRew], repeat_limit=2):
+        nodes = parents
+        # Precompute all the descendants for each node
+        descendants_dict = {}
+        for node_id in nodes:
+            descendants = self.get_leaf_descendants(node_id, child_map)
+            descendants_dict[node_id] = descendants if len(descendants) != 0 else [node_id]
 
-        id_variance_pairs = []
-        for fragment_pair in fragment_pairs:
-            (id1, frag1), (id2, frag2) = fragment_pair
-            trans1 = rollout.flatten_trajectories([frag1])
-            trans2 = rollout.flatten_trajectories([frag2])
+        # Precompute all the rewards for each fragment
+        rewards_dict = {}
+        for frag_id, frag in enumerate(fragments):
+            trans = rollout.flatten_trajectories([frag])
             with th.no_grad():
-                rews1 = self.preference_model.rewards(trans1)
-                rews2 = self.preference_model.rewards(trans2)
-            # always calculate the uncertainty on logit
-            returns1, returns2 = rews1.sum(0), rews2.sum(0)
-            var_estimate = (returns1 - returns2).var().item()
-            id_variance_pairs.append({"id1": id1, "id2": id2, "var": var_estimate})
+                rews = self.preference_model.rewards(trans)
+            # Always calculate the uncertainty on logit
+            rewards_dict[frag_id] = rews
 
-        # Sort the pairs by variance in descending order
-        id_variance_pairs.sort(key=lambda x: x["var"], reverse=True)
-         # Return the first num_pairs elements
-        #return id_variance_pairs[:num_pairs]
-        return id_variance_pairs
+        # Generate all possible pairs with their ids
+        node_pairs = list(itertools.combinations(nodes, 2))
+
+        id_variance_score_pairs = []
+        sampled_groups = []
+        for node_pair in node_pairs:
+            id1, id2 = node_pair
+            descendants1 = descendants_dict[id1]
+            descendants2 = descendants_dict[id2]
+
+            # Skip if a node is paired with itself or with a descendant or parent node
+            if id1 == id2 or set(descendants1) & set(descendants2):
+                continue
+
+            # Skip if the pair is a duplicate
+            if (descendants1, descendants2) in sampled_groups or (descendants2, descendants1) in sampled_groups:
+                continue
+
+            sampled_groups.append((descendants1, descendants2))
+
+            inter_variances = []
+            max_variance = float('-inf')
+            #print(f"Comparing groups {id1} and {id2}")
+            #print(f"Descendants1: {descendants1}")
+            #print(f"Descendants2: {descendants2}")
+            for desc1 in descendants1:
+                for desc2 in descendants2:
+                    rews1 = rewards_dict[desc1]
+                    rews2 = rewards_dict[desc2]
+                    returns1 = rews1.sum(0)
+                    returns2 = rews2.sum(0)
+                    var_estimate = (returns1 - returns2).var().item()
+                    inter_variances.append(var_estimate)
+                    if var_estimate > max_variance:
+                        max_variance = var_estimate
+            
+            # Calculate the inter variance between the groups
+            normalized_inter_variances = [var / max_variance for var in inter_variances]
+            mean_normalized_inter_variance = sum(normalized_inter_variances) / len(normalized_inter_variances) if normalized_inter_variances else 0
+
+            # Calculate intra-cluster variance
+            intra_variances1 = [rewards_dict[desc].var().item() if len(rewards_dict[desc]) > 1 else 1 for desc in descendants1]
+            intra_variances2 = [rewards_dict[desc].var().item() if len(rewards_dict[desc]) > 1 else 1 for desc in descendants2]
+
+            #print("Length of inter variances: ", len(inter_variances))
+            #print("Length of intra variances: ", max(len(intra_variances1), len(intra_variances2)))
+            normalized_intra_variances1 = [var / max_variance for var in intra_variances1]
+            mean_normalized_intra_variance1 = sum(normalized_intra_variances1) / len(normalized_intra_variances1) if normalized_intra_variances1 else 1
+
+            normalized_intra_variances2 = [var / max_variance for var in intra_variances2]
+            mean_normalized_intra_variance2 = sum(normalized_intra_variances2) / len(normalized_intra_variances2) if normalized_intra_variances2 else 1
+
+            max_mean_normalized_intra_variance = max(mean_normalized_intra_variance1, mean_normalized_intra_variance2)
+
+            #print(f"Mean inter variance: {mean_normalized_inter_variance}")
+            #print(f"Mean intra variance 1: {mean_normalized_intra_variance1}")
+            #print(f"Mean intra variance 2: {mean_normalized_intra_variance2}")
+            #print(f"Max mean intra variance: {max_mean_normalized_intra_variance}")
+
+            normalized_variance = mean_normalized_inter_variance / max_mean_normalized_intra_variance
+            #print(f"Normalized variance: {normalized_variance}")
+
+            # Penalize pairs where the groups are of different sizes
+            size_difference = abs(len(descendants1) - len(descendants2))
+            normalized_size_difference = size_difference / (len(descendants1) + len(descendants2))
+            penalized_variance = normalized_variance / (1 + normalized_size_difference)
+            #print(f"Penalized variance: {penalized_variance}")
+
+            id_variance_score_pairs.append({"id1": id1, "id2": id2, "group1": descendants1, "group_1_size": len(descendants1), "intravariance_1": mean_normalized_intra_variance1, "group2": descendants2, "intravariance_2": mean_normalized_intra_variance2, "group_2_size": len(descendants2), "intervariance": mean_normalized_inter_variance, "variance_score": penalized_variance})
+
+        # Sort the pairs by normalized variance in descending order
+        id_variance_score_pairs.sort(key=lambda x: x["variance_score"], reverse=True)
+        #print("Sorted pairs: ", id_mean_variance_pairs)
+        # Limit the occurrences of each node to repeat_limit
+        node_occurrences = Counter()
+        limited_pairs = []
+        for pair in id_variance_score_pairs:
+            if node_occurrences[pair["id1"]] < repeat_limit and node_occurrences[pair["id2"]] < repeat_limit:
+                limited_pairs.append(pair)
+                node_occurrences[pair["id1"]] += 1
+                node_occurrences[pair["id2"]] += 1
+
+        return limited_pairs
     
     def build_parent_map(self, node, parent_map=None):
         if parent_map is None:
@@ -1712,6 +1791,18 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             child_map[node_id] = []
 
         return child_map
+    
+    def filter_levels(self, node, levels, filtered_nodes=None):
+        if filtered_nodes is None:
+            filtered_nodes = []
+
+        if node['level'] in levels:
+            filtered_nodes.append(node['id'])
+
+        for child in node.get('children', []):
+            self.filter_levels(child, levels, filtered_nodes)
+
+        return filtered_nodes
             
     def get_leaf_descendants(self, node_id, child_map, descendants=None):
         if descendants is None:
@@ -1755,7 +1846,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         return fragments, preferences
 
-    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 8) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         fragment_tree = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
@@ -1765,6 +1856,11 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         parent_map = self.build_parent_map(fragment_tree)
         child_map = self.build_child_map(fragment_tree)
+        #filter the nodes to only include the lowest two levels except the leaf nodes
+        non_leaf_nodes = self.filter_levels(fragment_tree, levels=[1, 2], filtered_nodes=[])
+        #filter those nodes based on the number of descending leaf nodes
+        non_leaf_nodes = [node_id for node_id in non_leaf_nodes if len(self.get_leaf_descendants(node_id, child_map)) < max_suggested_group_size]
+
         #print('Parent map: ', parent_map)
         #print('\n')
         #print('Child_map: ', child_map)
@@ -1772,61 +1868,38 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         group_preferences = []
         preferences = []
 
-        sampled_groups = []
+        sampled_nodes = []
         if self.use_active_learning:
             # use active learning suggestions to sample two groups from fragment_tree
-            active_learning_suggestions = self.get_active_learning_suggestions(fragments)
+            start_time = time.time()
+            #print('non_leaf_nodes', non_leaf_nodes)
+            active_learning_suggestions = self.get_active_learning_suggestions(child_map, non_leaf_nodes, fragments)
+            #print(f"Active learning suggestions took {time.time() - start_time} seconds")
 
-            sampled_groups = []
-            #print('group pairs', num_pairs)
-            #print('active learning suggestions', len(active_learning_suggestions))
-            #print('length parent_map?', len(parent_map))
-            #print('length child_map?', len(child_map))
-            for suggestion in active_learning_suggestions:
-                #time.sleep(0.1)
-                #print(suggestion)
-                node1_id = parent_map[suggestion['id1']]
-                node2_id = parent_map[suggestion['id2']]
-                #print(f"parent of {suggestion['id1']} is {node1_id}")
-                #print(f"parent of {suggestion['id2']} is {node2_id}")
-                if node1_id == node2_id:
-                    continue
+            #group_occurrences = Counter(str(pair["group1"]) for pair in active_learning_suggestions[:num_pairs])
+            #group_occurrences.update(str(pair["group2"]) for pair in active_learning_suggestions[:num_pairs])
+            #group_occurrences_sorted = dict(sorted(group_occurrences.items(), key=lambda item: item[1], reverse=True))
+            #print(group_occurrences_sorted)
 
-                group1_ids = self.get_leaf_descendants(node1_id, child_map)
-                if len(group1_ids) == 1:
-                    node1_id = parent_map[node1_id]
-                    group1_ids = self.get_leaf_descendants(node1_id, child_map)
-
-                group2_ids = self.get_leaf_descendants(node2_id, child_map)
-                if len(group2_ids) == 1:
-                    node2_id = parent_map[node2_id]
-                    group2_ids = self.get_leaf_descendants(node2_id, child_map)
-
-                if set(group1_ids) & set(group2_ids):
-                    #print('same ids', group1_ids, group2_ids)
-                    continue
-
-                # we do not want duplicate pairs
-                if (group1_ids, group2_ids) in sampled_groups or (group2_ids, group1_ids) in sampled_groups:
-                    #print('duplicate pair')
-                    continue
-                sampled_groups.append((group1_ids, group2_ids))
-                
-            #print('sampled_fragments', len(sampled_groups))
+            #print('active_learning_suggestions', active_learning_suggestions[:10], ' ...')
+            sampled_nodes = [(suggestion['id1'], suggestion['id2']) for suggestion in active_learning_suggestions]
         else:
             # pick two groups from the lowest two non leaf node levels of the tree at random until we sampled as many pairs as needed
-            non_leaf_nodes = [node[id] for node in fragment_tree if node['children'] is not None and (node['level'] == 1 or node['level'] == 2)]
             for _ in range(num_pairs):
-                node1_id = self.rng.choice(non_leaf_nodes)
-                node2_id = self.rng.choice(non_leaf_nodes)
-                if node1_id == node2_id:
-                    continue
-                group1_ids = self.get_leaf_descendants(node1_id, child_map)
-                group2_ids = self.get_leaf_descendants(node2_id, child_map)
+                while True:
+                    node1_id = self.rng.choice(non_leaf_nodes)
+                    node2_id = self.rng.choice(non_leaf_nodes)
+                    if node1_id == node2_id:
+                        continue
 
-                group1 = [fragments[node_id] for node_id in group1_ids]
-                group2 = [fragments[node_id] for node_id in group2_ids]
-                sampled_groups.append((group1, group2))
+                    descendants1 = self.get_leaf_descendants(node1_id, child_map)
+                    group1_ids = descendants1 if len(descendants1) != 0 else [node1_id]
+                    descendants2 = self.get_leaf_descendants(node2_id, child_map)
+                    group2_ids = descendants2 if len(descendants2) != 0 else [node2_id]
+
+                    if (group1, group2) not in sampled_nodes and (group2, group1) not in sampled_nodes:
+                        break
+                sampled_nodes.append((node1_id, node2_id))
             #print('sampled_fragments', len(sampled_groups))
 
         #print('simulating user decisions', len(sampled_groups))
@@ -1836,9 +1909,16 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             'clean_groups': 0
         }
         feedback_counter = 0
-        for group1_ids, group2_ids in sampled_groups:
-            group1 = [fragments[node_id] for node_id in group1_ids]
-            group2 = [fragments[node_id] for node_id in group2_ids]
+        total_group_size = 0
+        sampled_pairs = 0
+        for node1_id, node2_id in sampled_nodes:
+            group1_ids = self.get_leaf_descendants(node1_id, child_map)
+            group2_ids = self.get_leaf_descendants(node2_id, child_map)
+            total_group_size += len(group1_ids) + len(group2_ids)
+            sampled_pairs += 1
+            print(f"number of fragments in group1: {len(group1_ids)}, number of fragments in group2: {len(group2_ids)}")
+            group1 = [fragments[fragment_id] for fragment_id in group1_ids]
+            group2 = [fragments[fragment_id] for fragment_id in group2_ids]
             group1, group2, preference, decision = self.simulate_user_decision(group1, group2, self.std_dev)
             decision_counts[decision] += 1
             if len(group1) != 0 and len(group2) != 0:
@@ -1850,6 +1930,8 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             feedback_counter += max(len(group1), len(group2))
             if feedback_counter >= num_pairs:
                 break
+
+        print(f"Mean group size: {total_group_size / sampled_pairs}")
 
         print('group_preferences', len(group_preferences))
         for group_preference in group_preferences:
