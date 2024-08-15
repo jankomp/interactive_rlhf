@@ -12,17 +12,20 @@ from stable_baselines3 import PPO
 import numpy as np
 import torch.optim as optim
 from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1
+from imitation.util import logger
+import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
-total_timesteps = 100_000
-total_comparisons = 300
-rounds = 5
+total_timesteps = 200_000
+total_comparisons = 500
+rounds = 9
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 100_000
+final_training_timesteps = 800_000
+tb_log_name = 'pairwise_comparison'
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -135,11 +138,11 @@ trajectory_generator = preference_comparisons.AgentTrainer(
     venv=venv,
     rng=rng,
     exploration_frac=0.2,
-    #video_folder='videos',
-    #video_length=fragment_length,
-    #name_prefix='rl-video'
 )
 
+
+default_logger = sb_logger.Logger(folder='/logs', output_formats='stdout,log,csv,tensorboard')
+custom_logger = logger.HierarchicalLogger(default_logger=default_logger)
 
 pref_comparisons = preference_comparisons.PreferenceComparisons(
     trajectory_generator,
@@ -154,12 +157,13 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
     query_schedule="constant",
+    custom_logger=custom_logger,
 )
 
 pref_comparisons.train(
     total_timesteps=total_timesteps,
     total_comparisons=total_comparisons,
-    tb_log_name='pairwise_comparison',
+    tb_log_name=tb_log_name,
 )
 
 from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
@@ -184,7 +188,7 @@ learned_reward_venv = RewardVecEnvWrapper(venv, reward_net.predict_processed)
 #    learning_rate=2e-3,
 #)
 print(f"Training the learner for {final_training_timesteps} timesteps")
-trajectory_generator.train(final_training_timesteps)  # Note: set to 100_000 to train a proficient expert
+trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
 from stable_baselines3.common.evaluation import evaluate_policy
 

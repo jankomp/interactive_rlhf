@@ -14,17 +14,20 @@ from stable_baselines3 import PPO
 import numpy as np
 import torch.optim as optim
 from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1
+from imitation.util import logger
+import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
-total_timesteps = 100_000
-total_comparisons = 300
-rounds = 5
+total_timesteps = 200_000
+total_comparisons = 500
+rounds = 9
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 100_000
+final_training_timesteps = 800_000
+tb_log_name = 'groupwise_comparison'
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -127,6 +130,7 @@ agent = PPO(
     gae_lambda=0.95,
     gamma=0.97,
     n_epochs=10,
+    tensorboard_log="tb_logs",
 )
 #agent = PPO.load('rlhf_group_wise' + chosen_environment_short_name)
 
@@ -167,7 +171,7 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
 pref_comparisons.train(
     total_timesteps=total_timesteps,
     total_comparisons=total_comparisons,
-    tb_log_name='groupwise_comparison',
+    tb_log_name=tb_log_name,
 )
 
 from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
@@ -193,7 +197,7 @@ learned_reward_venv = RewardVecEnvWrapper(venv, reward_net.predict_processed)
 #)
 
 print(f"Training the learner for {final_training_timesteps} timesteps")
-trajectory_generator.train(final_training_timesteps)  # Note: set to 100_000 to train a proficient expert
+trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
 from stable_baselines3.common.evaluation import evaluate_policy
 
@@ -203,7 +207,7 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save('rlhf_group_wise' + chosen_environment_short_name)
+learner.save('rlhf_group_wise_' + chosen_environment_short_name)
 print(f"Model saved as rlhf_group_wise{chosen_environment_short_name}")
 
 from gymnasium.wrappers import RecordVideo
