@@ -18,7 +18,7 @@ from imitation.util import logger
 import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
-total_timesteps = 200_000
+total_timesteps = 90_000
 total_comparisons = 500
 rounds = 9
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
@@ -26,7 +26,7 @@ fragment_length = 25 # make sure that max_episode_steps is divisible by fragment
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 800_000
+final_training_timesteps = 910_000
 tb_log_name = 'groupwise_comparison'
 # END: PARAMETERS
 
@@ -145,10 +145,6 @@ trajectory_generator = preference_comparisons.AgentTrainer(
     venv=venv,
     rng=rng,
     exploration_frac=0.25,
-    #video_folder='videos',
-    #video_length=fragment_length,
-    #name_prefix='rl-video',
-    #timeline=True,
     custom_logger=hierarchical_logger,
 )
 
