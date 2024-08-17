@@ -18,15 +18,17 @@ from imitation.util import logger
 import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
-total_timesteps = 90_000
-total_comparisons = 500
-rounds = 9
+total_timesteps = 180_000
+total_comparisons = 200
+rounds = 3
+initial_comparison_frac = 1 / (rounds + 1) # We want to keep all the comparison rounds constant
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 910_000
+final_training_timesteps = 1_820_000
+logs_folder = 'logs_0816_00'
 tb_log_name = 'groupwise_comparison'
 # END: PARAMETERS
 
@@ -72,12 +74,7 @@ reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, 
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
 preference_model = preference_comparisons.PreferenceModel(reward_net)
-# reward_trainer = preference_comparisons.BasicRewardTrainer(
-#     preference_model=preference_model,
-#     loss=preference_comparisons.CrossEntropyRewardLoss(),
-#     epochs=3,
-#     rng=rng,
-# )
+# loaded_model = preference_comparisons.PreferenceModel.load_model(logs_folder + f"/rlhf_groupwise_preference_model_{chosen_environment_short_name}", *args, **kwargs)
 
 
 # Create a lambda updater
@@ -130,14 +127,9 @@ agent = PPO(
     gae_lambda=0.95,
     gamma=0.97,
     n_epochs=10,
-    tensorboard_log="tb_logs",
+    tensorboard_log=logs_folder + "/tb_logs",
 )
-#agent = PPO.load('rlhf_group_wise' + chosen_environment_short_name)
-
-# Create the logger
-default_logger = Logger('logs', output_formats=['stdout'])
-hierarchical_logger = HierarchicalLogger(default_logger)
-
+#agent = PPO.load('rlhf_group_wise_policy_' + chosen_environment_short_name)
 
 trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
@@ -145,9 +137,13 @@ trajectory_generator = preference_comparisons.AgentTrainer(
     venv=venv,
     rng=rng,
     exploration_frac=0.25,
-    custom_logger=hierarchical_logger,
 )
 
+
+default_logger = sb_logger.Logger(folder=logs_folder, output_formats='stdout,log,csv,tensorboard')
+custom_logger = logger.HierarchicalLogger(default_logger=default_logger)
+
+feedback_logger = preference_comparisons.FeedbackLogger(logs_folder, tb_log_name + '.csv')
 
 pref_comparisons = preference_comparisons.PreferenceComparisons(
     trajectory_generator,
@@ -158,10 +154,12 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     reward_trainer=reward_trainer,
     fragment_length=fragment_length,
     transition_oversampling=1,
-    initial_comparison_frac=0.1,
+    initial_comparison_frac=initial_comparison_frac,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
     query_schedule="constant",
+    custom_logger=custom_logger,
+    feedback_logger=feedback_logger,
 )
 
 pref_comparisons.train(
@@ -174,26 +172,11 @@ from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
 
 learned_reward_venv = RewardVecEnvWrapper(venv, reward_net.predict_processed)
 
-#learner = PPO(
-#    seed=0,
-#    policy=FeedForward32Policy,
-#    policy_kwargs=dict(
-#        features_extractor_class=NormalizeFeaturesExtractor,
-#        features_extractor_kwargs=dict(normalize_class=RunningNorm),
-#    ),
-#    env=learned_reward_venv,
-#    batch_size=64,
-#    ent_coef=0.01,
-#    n_epochs=10,
-#    n_steps=2048 // learned_reward_venv.num_envs,
-#    clip_range=0.1,
-#    gae_lambda=0.95,
-#    gamma=0.97,
-#    learning_rate=2e-3,
-#)
 
 print(f"Training the learner for {final_training_timesteps} timesteps")
 trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
+
+preference_model.save_model(logs_folder + '/rlhf_pairwise_preference_model')
 
 from stable_baselines3.common.evaluation import evaluate_policy
 
@@ -203,8 +186,11 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save('rlhf_group_wise_' + chosen_environment_short_name)
-print(f"Model saved as rlhf_group_wise{chosen_environment_short_name}")
+learner.save('rlhf_group_wise_policy_' + chosen_environment_short_name)
+print(f"Model saved as rlhf_group_wise_policy_{chosen_environment_short_name}")
+
+preference_model.save_model(logs_folder + f"/rlhf_pairwise_preference_model_{chosen_environment_short_name}")
+print(f"Model saved as rlhf_pairwise_preference_model_{chosen_environment_short_name}")
 
 from gymnasium.wrappers import RecordVideo
 

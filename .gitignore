@@ -170,5 +170,6 @@ active_learning_suggestions.json
 clustered_fragments.json
 dendrogram.png
 tb_logs/
+feedback_logs/
 compare14thaugust/
 videos/
