@@ -66,6 +66,8 @@ import time
 import json
 from flask_cors import CORS
 from threading import Thread, Event
+import csv
+import statistics
 
 from scipy.spatial.distance import euclidean
 from fastdtw import fastdtw
@@ -641,6 +643,18 @@ class PreferenceModel(nn.Module):
         else:
             assert probability.shape == ()
         return probability
+    
+    def save_model(self, path):
+        """Save the model to the specified path."""
+        th.save(self.state_dict(), path)
+
+    @classmethod
+    def load_model(cls, path, *init_args, **init_kwargs):
+        """Load the model from the specified path."""
+        model = cls(*init_args, **init_kwargs)
+        model.load_state_dict(th.load(path))
+        model.eval()  # Set the model to evaluation mode
+        return model
 
 
 class Fragmenter(abc.ABC):
@@ -2348,6 +2362,58 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.current_fragments_hash = None
         return fragment_pairs, np.array(preferences, dtype=np.float32)
 
+class FeedbackLogger:
+    def __init__(self, dirname, filename):
+        # If the directory doesn't exist, create it
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+
+        # Open the file in the specified directory
+        self.file = open(os.path.join(dirname, filename), 'w', newline='')
+        self.writer = csv.writer(self.file)
+        self.writer.writerow(['Total Preferences', 'Incorrect Preferences', 'Avg Correctness (Correct)', 'Avg Correctness (Incorrect)', 'Avg Correctness (Equal)'])
+    
+    def __call__(self, fragment_pairs, preferences):
+        total_preferences = len(preferences)
+        correct_preferences = 0
+        correct_comparisons = []
+        incorrect_comparisons = []
+        incorrect_equal_comparisons = []
+
+        # Calculate true rewards for all fragment pairs
+        true_rewards1, true_rewards2 = self._reward_sums(fragment_pairs)
+
+        for preference, true_reward1, true_reward2 in zip(preferences, true_rewards1, true_rewards2):
+            if preference == 1.0 and true_reward1 <= true_reward2:
+                incorrect_comparisons.append(abs(true_reward1 - true_reward2))
+            elif preference == -1.0 and true_reward1 >= true_reward2:
+                incorrect_comparisons.append(abs(true_reward1 - true_reward2))
+            elif preference == 0.5 and true_reward1 != true_reward2:
+                incorrect_equal_comparisons.append(abs(true_reward1 - true_reward2))
+            else:
+                correct_preferences += 1
+                correct_comparisons.append(abs(true_reward1 - true_reward2))
+
+        avg_correctness_correct = statistics.mean(correct_comparisons) if correct_comparisons else 0
+        avg_correctness_incorrect = statistics.mean(incorrect_comparisons) if incorrect_comparisons else 0
+        avg_equal_incorrect = statistics.mean(incorrect_equal_comparisons) if incorrect_equal_comparisons else 0
+
+        self.writer.writerow([total_preferences, total_preferences - correct_preferences, avg_correctness_correct, avg_correctness_incorrect, avg_equal_incorrect])
+
+    def _reward_sums(self, fragment_pairs) -> Tuple[np.ndarray, np.ndarray]:
+        rews1, rews2 = zip(
+            *[
+                (
+                    f1.rews.sum(),
+                    f2.rews.sum(),
+                )
+                for f1, f2 in fragment_pairs
+            ],
+        )
+        return np.array(rews1, dtype=np.float32), np.array(rews2, dtype=np.float32)
+
+    def close(self):
+        self.file.close()
 
 class PreferenceDataset(data_th.Dataset):
     """A PyTorch Dataset for preference comparisons.
@@ -2943,6 +3009,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         rng: Optional[np.random.Generator] = None,
         query_schedule: Union[str, type_aliases.Schedule] = "hyperbolic",
         json_fragmenter: Optional[JsonFragmenter] = None,
+        feedback_logger: Optional[FeedbackLogger] = None,
     ) -> None:
         """Initialize the preference comparison trainer.
 
@@ -3106,6 +3173,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
 
         self.dataset = PreferenceDataset(max_size=comparison_queue_size)
         self.json_fragmenter = json_fragmenter
+        self.feedback_logger = feedback_logger
 
     def train(
         self,
@@ -3172,7 +3240,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if isinstance(self.preference_gatherer, HumanGathererAPI):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    fragments, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*3)
+                    fragment_pairs, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*3)
             elif isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter):
                 self.logger.log("Creating fragment pairs")
                 num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
@@ -3182,24 +3250,28 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
                     start_time = time.time()
-                    fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs, round_time_limit=num_pairs*3)
+                    fragment_pairs, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs, round_time_limit=num_pairs*3)
                     end_time = time.time()
                     self.logger.log(f"Preference gathering took {end_time - start_time} seconds")
             elif isinstance(self.preference_gatherer, SyntheticGatherer):
                 self.logger.log("Creating fragment pairs")
-                fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
+                fragment_pairs = self.fragmenter(trajectories, self.fragment_length, num_pairs)
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    preferences = self.preference_gatherer(fragments)
+                    preferences = self.preference_gatherer(fragment_pairs)
             else:            
                 self.logger.log("Creating fragment pairs")
-                fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
+                fragment_pairs = self.fragmenter(trajectories, self.fragment_length, num_pairs)
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    fragments, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs)
+                    fragment_pairs, preferences = self.preference_gatherer(fragment_pairs, fragment_length=self.fragment_length, num_pairs=num_pairs)
 
-            self.dataset.push(fragments, preferences)
+            if self.feedback_logger is not None:
+                self.feedback_logger(fragment_pairs, preferences)
+
+            self.dataset.push(fragment_pairs, preferences)
             self.logger.log(f"Dataset now contains {len(self.dataset)} comparisons")
+
 
             ##########################
             # Train the reward model #
