@@ -23,12 +23,12 @@ total_comparisons = 200
 rounds = 3
 initial_comparison_frac = 1 / (rounds + 1) # We want to keep all the comparison rounds constant
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
-fragment_length = 100 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -4.5
 environment_number = 1 # integer from 0 to 7
 final_training_timesteps = 1_820_000
-logs_folder = 'logs_0816_00'
+logs_folder = 'logs_dubflipper'
 tb_log_name = 'groupwise_comparison'
 # END: PARAMETERS
 
@@ -73,8 +73,8 @@ venv = make_vec_env(
 reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
-preference_model = preference_comparisons.PreferenceModel(reward_net)
-# loaded_model = preference_comparisons.PreferenceModel.load_model(logs_folder + f"/rlhf_groupwise_preference_model_{chosen_environment_short_name}", *args, **kwargs)
+#preference_model = preference_comparisons.PreferenceModel(reward_net)
+preference_model = preference_comparisons.PreferenceModel.load_model(f"rlhf_groupwise_preference_model_{chosen_environment_short_name}", reward_net)
 
 
 # Create a lambda updater
@@ -129,7 +129,7 @@ gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(rng=rng, a
 #    n_epochs=10,
 #    tensorboard_log=logs_folder + "/tb_logs",
 #)
-agent = PPO.load('rlhf_group_wise_policy_' + chosen_environment_short_name)
+agent = PPO.load('rlhf_groupwise_policy_' + chosen_environment_short_name)
 
 trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
@@ -186,11 +186,11 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save('rlhf_group_wise_policy_' + chosen_environment_short_name)
+learner.save('rlhf_groupwise_policy_' + chosen_environment_short_name)
 print(f"Model saved as rlhf_group_wise_policy_{chosen_environment_short_name}")
 
 preference_model.save_model(logs_folder + f"/rlhf_pairwise_preference_model_{chosen_environment_short_name}")
-print(f"Model saved as rlhf_pairwise_preference_model_{chosen_environment_short_name}")
+print(f"Model saved as rlhf_groupwise_preference_model_{chosen_environment_short_name}")
 
 from gymnasium.wrappers import RecordVideo
 
