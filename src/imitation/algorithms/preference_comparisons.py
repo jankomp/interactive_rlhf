@@ -3263,7 +3263,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if isinstance(self.preference_gatherer, HumanGathererAPI):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    fragment_pairs, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*3)
+                    fragment_pairs, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*2)
             elif isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter):
                 self.logger.log("Creating fragment pairs")
                 num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
@@ -3273,7 +3273,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
                     start_time = time.time()
-                    fragment_pairs, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs, round_time_limit=num_pairs*3)
+                    fragment_pairs, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs, round_time_limit=num_pairs*2)
                     end_time = time.time()
                     self.logger.log(f"Preference gathering took {end_time - start_time} seconds")
             elif isinstance(self.preference_gatherer, SyntheticGatherer):

@@ -18,16 +18,16 @@ from imitation.util import logger
 import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
-total_timesteps = 180_000
-total_comparisons = 200
-rounds = 3
+total_timesteps = 50_000
+total_comparisons = 300
+rounds = 4
 initial_comparison_frac = 1 / (rounds + 1) # We want to keep all the comparison rounds constant
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 1_820_000
+final_training_timesteps = 200_000
 logs_folder = 'logs_0816_00'
 tb_log_name = 'groupwise_comparison'
 # END: PARAMETERS
@@ -46,18 +46,15 @@ rng = np.random.default_rng(0)
 
 # we need a videoWrapper only for the first environment, since the VideoRecorder can't be used in parallel environments
 def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
-    if i == 0:
-        return VideoWrapper(
-            env,
-            directory='videos',
-            record_video_trigger = lambda step: step % fragment_length == 0,
-            video_length=fragment_length,
-            name_prefix=f'rl-video-env-{i}',
-            timeline=True,
-            every_nth_timestep=every_n_frames,
-        )
-    else:
-        return env
+    return VideoWrapper(
+        env,
+        directory='videos',
+        record_video_trigger = lambda step: step % fragment_length == 0,
+        video_length=fragment_length,
+        name_prefix=f'rl-video-env-{i}',
+        timeline=True,
+        every_nth_timestep=every_n_frames,
+    )
 
 venv = make_vec_env(
     chosen_environment,
