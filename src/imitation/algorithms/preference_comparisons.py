@@ -264,7 +264,7 @@ class AgentTrainer(TrajectoryGenerator):
             **kwargs,
         )
 
-    def sample(self, steps: int) -> Sequence[types.TrajectoryWithRew]:
+    def sample(self, steps: int, progress_callback=None) -> Sequence[types.TrajectoryWithRew]:
         # Create a new vectorized environment that contains only one sub-environment
         single_env = vec_env.DummyVecEnv([lambda: self.algorithm.get_env().envs[0]])
 
@@ -324,7 +324,8 @@ class AgentTrainer(TrajectoryGenerator):
         agent_trajs = _get_trajectories(agent_trajs, agent_steps)
 
         trajectories = list(agent_trajs)
-
+        if progress_callback is not None:
+            progress_callback(0.6)
         if exploration_steps > 0:
             self.logger.log(f"Sampling {exploration_steps} exploratory transitions.")
             sample_until = rollout.make_sample_until(
@@ -1399,6 +1400,7 @@ class HumanGathererAPI(PreferenceGatherer):
         self.timer.start()
         self.total_feedbacks = 0
         self.round_time_limit = 0
+        self.progress = 0.0
         self.timer = None
         self.fragmenter = fragmenter
         self.app.route('/key_press', methods=['POST'])(self.key_press)
@@ -1414,13 +1416,20 @@ class HumanGathererAPI(PreferenceGatherer):
         self.server.start()
 
     def send_videos(self):
-        yield 'data: {}\n\n'.format(json.dumps(self.videos))
+        data = {
+            'videos': self.videos,
+            'progress': self.progress,
+        }
+        yield 'data: {}\n\n'.format(json.dumps(data))
 
     def get_total_feedbacks(self):
         return jsonify({'given_feedbacks': self.feedback_count, 'total_feedbacks': self.total_feedbacks})
     
     def get_round_feedbacks(self):
         return jsonify({'round_feedbacks': self.round_feedbacks})
+    
+    def set_progress(self, progress):
+        self.progress = progress
 
     def key_press(self):
         key = request.json.get('key')
@@ -1487,6 +1496,7 @@ class HumanGathererAPI(PreferenceGatherer):
             self.timer.unblock()
             while  self.timer.get_elapsed_time() < round_time_limit:
                 fragment_pair = self.fragmenter.get_fragment_pair(trajectories, fragment_length)
+                self.set_progress(1.0)
                 video_path1 = find_video_file(fragment_pair[0].infos)
                 video_path2 = find_video_file(fragment_pair[1].infos)
                 if video_path1 is None or video_path2 is None:
@@ -1505,6 +1515,7 @@ class HumanGathererAPI(PreferenceGatherer):
                 print(f'Elapsed time: {self.timer.get_elapsed_time()}/{round_time_limit}')
         self.display_videos('','')
         self.timer.block()
+        self.set_progress(0.0)
         print(f"Feedback took {self.timer.get_elapsed_time()} seconds in total")
 
         return fragment_pairs, np.array(preferences, dtype=np.float32)
@@ -1975,6 +1986,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.timer = None
         self.preference_model = preference_model
         self.current_fragments_hash = None
+        self.progress = 0
         self.active_learning_suggestions = []
         self.fragments = []
         self.fragments_for_frontend = []
@@ -2000,7 +2012,11 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return jsonify({'given_feedbacks': self.feedback_count, 'total_feedbacks': self.total_feedbacks})
     
     def send_fragment_hash(self):
-        yield 'data: {}\n\n'.format(json.dumps(self.current_fragments_hash))
+        data = {
+            'current_fragments_hash': self.current_fragments_hash,
+            'progress': self.progress,
+        }
+        yield 'data: {}\n\n'.format(json.dumps(data))
 
     def stream(self):
         return Response(self.send_fragment_hash(), mimetype='text/event-stream')
@@ -2083,6 +2099,9 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         if self.timer is not None:
             self.timer.stop()
         self.server.shutdown()
+
+    def set_progress(self, progress):
+        self.progress = progress
 
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
         n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
@@ -2325,7 +2344,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             self.active_learning_suggestions = self.get_active_learning_suggestions(fragments, num_pairs)
 
         self.fragments = fragments
-        self.fragments_for_frontend = self.hierarchical_clustering(fragments, fragment_length=fragment_length)        
+        self.fragments_for_frontend = self.hierarchical_clustering(fragments, fragment_length=fragment_length)    
+        self.set_progress(1.0)    
         child_map = self.build_child_map(self.fragments_for_frontend)
         #filter the nodes to only include the lowest two levels except the leaf nodes
         non_leaf_nodes = self.filter_levels(self.fragments_for_frontend, levels=[1, 2], filtered_nodes=[])
@@ -3221,9 +3241,10 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             self.logger.log(
                 f"Collecting {2 * num_pairs} fragments ({num_steps} transitions)",
             )
+            self.update_progress(0.4)
             if not isinstance(self.fragmenter, JsonFragmenter): 
                 start_time = time.time()
-                trajectories = self.trajectory_generator.sample(num_steps)
+                trajectories = self.trajectory_generator.sample(num_steps, self.update_progress)
                 end_time = time.time()
                 self.logger.log(f"Trajectory generation took {end_time - start_time} seconds")
                 # pop the last trajectory (since the video could not be saved correctly)
@@ -3235,6 +3256,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 self._check_fixed_horizon(horizons)
             else:
                 trajectories = self.fragmenter.load(f'fragments_{self._iteration}.json')
+            
+            self.update_progress(0.8)
 
             #for the pairwise comparison of HumanGathererAPI we need to create one trajectory pair for every user query
             if isinstance(self.preference_gatherer, HumanGathererAPI):
@@ -3266,6 +3289,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                     self.logger.log("Gathering preferences")
                     fragment_pairs, preferences = self.preference_gatherer(fragment_pairs, fragment_length=self.fragment_length, num_pairs=num_pairs)
 
+            self.update_progress(0.0)
             if self.feedback_logger is not None:
                 self.feedback_logger(fragment_pairs, preferences)
 
@@ -3286,6 +3310,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 start_time = time.time()
                 self.reward_trainer.train(self.dataset, epoch_multiplier=epoch_multiplier)
                 end_time = time.time()
+                self.update_progress(0.2)
                 self.logger.log(f"Reward model training took {end_time - start_time} seconds")
                 base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
                 assert f"{base_key}/loss" in self.logger.name_to_value
@@ -3320,3 +3345,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             self._iteration += 1
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
+    
+    def update_progress(self, progress: float):
+        if isinstance(self.preference_gatherer, HumanGathererAPI) or isinstance(self.preference_gatherer, HumanGathererForGroupComparisonsAPI):
+            self.preference_gatherer.set_progress(progress)
