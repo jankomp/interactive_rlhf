@@ -3245,6 +3245,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if not isinstance(self.fragmenter, JsonFragmenter): 
                 start_time = time.time()
                 trajectories = self.trajectory_generator.sample(num_steps, self.update_progress)
+                print(f"Trajectories: {len(trajectories)}")
                 end_time = time.time()
                 self.logger.log(f"Trajectory generation took {end_time - start_time} seconds")
                 # pop the last trajectory (since the video could not be saved correctly)
@@ -3266,8 +3267,10 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                     fragment_pairs, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*2)
             elif isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter):
                 self.logger.log("Creating fragment pairs")
-                num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
+                #num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
+                num_fragments = 2*num_pairs
                 fragments = self.fragmenter(trajectories, self.fragment_length, num_fragments=num_fragments)
+                print(f"Fragments: {len(fragments)}")
                 if self.json_fragmenter is not None:
                     self.json_fragmenter.save(fragments, f'fragments_{self._iteration}.json')
                 with self.logger.accumulate_means("preferences"):
@@ -3343,6 +3346,9 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if callback:
                 callback(self._iteration)
             self._iteration += 1
+
+        if self.feedback_logger is not None:
+                self.feedback_logger.close()
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
     

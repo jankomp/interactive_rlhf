@@ -26,7 +26,7 @@ every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
 final_training_timesteps = 200_000
-logs_folder = 'logs_0816_00'
+logs_folder = 'logs_0819_01'
 tb_log_name = 'pairwise_comparison'
 # END: PARAMETERS
 
@@ -43,15 +43,18 @@ if chosen_environment in [3, 4, 6, 7]:
 rng = np.random.default_rng(0)
 
 def video_recorder_wrapper(env: gym.Env, i: int) -> gym.Env:
-    return VideoWrapper(
-        env,
-        directory='videos',
-        record_video_trigger = lambda step: step % fragment_length == 0,
-        video_length=fragment_length,
-        name_prefix=f'rl-video-env-{i}',
-        timeline=True,
-        every_nth_timestep=every_n_frames,
-    )
+    if i == 0:
+        return VideoWrapper(
+            env,
+            directory='videos',
+            record_video_trigger = lambda step: step % fragment_length == 0,
+            video_length=fragment_length,
+            name_prefix=f'rl-video-env-{i}',
+            timeline=True,
+            every_nth_timestep=every_n_frames,
+        )
+    else:
+        return env
     
 venv = make_vec_env(
     chosen_environment,
@@ -126,6 +129,7 @@ agent = PPO(
     n_epochs=10,
     tensorboard_log=logs_folder + "/tb_logs",
 )
+#agent = PPO.load('rlhf_group_wise_policy_model_' + chosen_environment_short_name)
 
 trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
@@ -144,17 +148,17 @@ feedback_logger = preference_comparisons.FeedbackLogger(logs_folder, tb_log_name
 pref_comparisons = preference_comparisons.PreferenceComparisons(
     trajectory_generator,
     reward_net,
-    num_iterations=rounds,  # Set to 60 for better performance
+    num_iterations=rounds,
     fragmenter=fragmenter,
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
     fragment_length=fragment_length,
-    transition_oversampling=1,
+    transition_oversampling=1.2,
     initial_comparison_frac=initial_comparison_frac,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
     query_schedule="constant",
-    custom_logger=custom_logger,
+    #custom_logger=custom_logger,
     feedback_logger=feedback_logger,
 )
 
@@ -164,27 +168,6 @@ pref_comparisons.train(
     tb_log_name=tb_log_name,
 )
 
-from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
-
-learned_reward_venv = RewardVecEnvWrapper(venv, reward_net.predict_processed)
-
-#learner = PPO(
-#    seed=0,
-#    policy=FeedForward32Policy,
-#    policy_kwargs=dict(
-#        features_extractor_class=NormalizeFeaturesExtractor,
-#        features_extractor_kwargs=dict(normalize_class=RunningNorm),
-#    ),
-#    env=learned_reward_venv,
-#    batch_size=64,
-#    ent_coef=0.01,
-#    n_epochs=10,
-#    n_steps=2048 // learned_reward_venv.num_envs,
-#    clip_range=0.1,
-#    gae_lambda=0.95,
-#    gamma=0.97,
-#    learning_rate=2e-3,
-#)
 print(f"Training the learner for {final_training_timesteps} timesteps")
 trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
@@ -196,8 +179,8 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save(logs_folder + '/rlhf_pairwise_policy_' + chosen_environment_short_name)
-print(f"Model saved as rlhf_pairwise_policy_{chosen_environment_short_name}")
+learner.save(logs_folder + '/rlhf_pairwise_policy_model' + chosen_environment_short_name)
+print(f"Model saved as rlhf_pairwise_policy_model{chosen_environment_short_name}")
 
 preference_model.save_model(logs_folder + f"/rlhf_pairwise_preference_model_{chosen_environment_short_name}")
 print(f"Model saved as rlhf_pairwise_preference_model_{chosen_environment_short_name}")
@@ -207,7 +190,7 @@ from gymnasium.wrappers import RecordVideo
 # Create the environment
 env = gym.make(chosen_environment, render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
 env.model.opt.gravity[2] = gravity
-env = RecordVideo(env, './evaluation_videos', name_prefix="hopper", episode_trigger=lambda x: x % 1 == 0) 
+env = RecordVideo(env, logs_folder + '/videos', name_prefix=tb_log_name + '_' + chosen_environment_short_name, episode_trigger=lambda x: x % 1 == 0) 
 # Run the model in the environment
 obs, info = env.reset()
 for _ in range(1000):
