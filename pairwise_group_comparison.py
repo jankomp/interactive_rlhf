@@ -27,8 +27,8 @@ fragment_length = 25 # make sure that max_episode_steps is divisible by fragment
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 200_000
-logs_folder = 'logs_0819_01'
+final_training_timesteps = 1_450_000
+logs_folder = 'logs_0820_01'
 tb_log_name = 'groupwise_comparison'
 # END: PARAMETERS
 
@@ -74,7 +74,7 @@ reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, 
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
 preference_model = preference_comparisons.PreferenceModel(reward_net)
-# loaded_model = preference_comparisons.PreferenceModel.load_model(logs_folder + f"/rlhf_groupwise_preference_model_{chosen_environment_short_name}", reward_net)
+#preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + f"/rlhf_groupwise_preference_model_{chosen_environment_short_name}", reward_net)
 
 
 # Create a lambda updater
@@ -129,7 +129,7 @@ agent = PPO(
     n_epochs=10,
     tensorboard_log=logs_folder + "/tb_logs",
 )
-#agent = PPO.load('rlhf_group_wise_policy_model_' + chosen_environment_short_name)
+#agent = PPO.load('rlhf_groupwise_policy_model_' + chosen_environment_short_name)
 
 trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
@@ -153,7 +153,7 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
     fragment_length=fragment_length,
-    transition_oversampling=1.2,
+    transition_oversampling=1.5,
     initial_comparison_frac=initial_comparison_frac,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
@@ -184,8 +184,8 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save(logs_folder + 'rlhf_group_wise_policy_model_' + chosen_environment_short_name)
-print(f"Model saved as rlhf_group_wise_policy_model_{chosen_environment_short_name}")
+learner.save(logs_folder + 'rlhf_groupwise_policy_model_' + chosen_environment_short_name)
+print(f"Model saved as rlhf_groupwise_policy_model_{chosen_environment_short_name}")
 
 preference_model.save_model(logs_folder + f"/rlhf_groupwise_preference_model_{chosen_environment_short_name}")
 print(f"Model saved as rlhf_groupwise_preference_model_{chosen_environment_short_name}")
