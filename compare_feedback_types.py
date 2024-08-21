@@ -16,11 +16,15 @@ import stable_baselines3.common.logger as sb_logger
 rng = np.random.default_rng(0)
 def intantiate_and_train(pairwise, tb_log_name):
     # make sure that max_episode_steps is divisible by fragment_length
+    total_timesteps = 100_000
+    total_comparisons = 500
+    rounds = 9
     max_episode_steps = 2000
     fragment_length = 25
     gravity = -9.81
     std_dev = 0.0 # irrationality
-    final_training_timesteps = 400_000
+    final_training_timesteps = 900_000
+    logs_folder = 'compare_feedback_types_no_noise'
 
     venv = make_vec_env("Hopper-v4", rng=rng, render_mode='rgb_array', n_envs=8, max_episode_steps=max_episode_steps, env_make_kwargs={'terminate_when_unhealthy': False}, gravity=gravity)
 
@@ -93,7 +97,7 @@ def intantiate_and_train(pairwise, tb_log_name):
         gae_lambda=0.95,
         gamma=0.97,
         n_epochs=10,
-        tensorboard_log="./compare_feedback_types_perfect/",
+        tensorboard_log= logs_folder + "/tb_logs/",
     )
 
     trajectory_generator = preference_comparisons.AgentTrainer(
@@ -107,10 +111,12 @@ def intantiate_and_train(pairwise, tb_log_name):
     default_logger = sb_logger.Logger(folder='/logs', output_formats='stdout,log,csv,tensorboard')
     custom_logger = logger.HierarchicalLogger(default_logger=default_logger)
 
+    feedback_logger = preference_comparisons.FeedbackLogger(logs_folder, tb_log_name + '.csv')
+
     pref_comparisons = preference_comparisons.PreferenceComparisons(
         trajectory_generator,
         reward_net,
-        num_iterations=9,  # Set to 60 for better performance
+        num_iterations=rounds,  # Set to 60 for better performance
         fragmenter=fragmenter,
         preference_gatherer=gatherer,
         reward_trainer=reward_trainer,
@@ -121,11 +127,12 @@ def intantiate_and_train(pairwise, tb_log_name):
         initial_epoch_multiplier=4,
         query_schedule="constant",
         custom_logger=custom_logger,
+        feedback_logger=feedback_logger,
     )
 
     pref_comparisons.train(
-        total_timesteps=800_000,
-        total_comparisons=1000,
+        total_timesteps=total_timesteps,
+        total_comparisons=total_comparisons,
         tb_log_name=tb_log_name,
     )
 
