@@ -1885,7 +1885,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         return fragments, preferences
 
     def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 8) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
-        """Gather human preferences for the given fragment pairs."""
+        """Gather synthetic preferences for the given fragment pairs."""
         fragment_pairs = []
         fragment_tree = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
         
@@ -1969,29 +1969,6 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             if feedback_counter >= num_pairs:
                 break
 
-        if feedback_counter < num_pairs:
-            most_promising_1v1_pairs = self.most_promising_1v1_comparisons(fragments, num_pairs)
-            # Convert group_preferences to a set for efficient lookup
-            existing_pairs = {(tuple(map(tuple, pair['group1'])), tuple(map(tuple, pair['group2']))) for pair in group_preferences}
-            
-            for pair in most_promising_1v1_pairs:
-                # Convert the pair to a tuple for comparison
-                promising_group1 = [fragments[fragment_id] for fragment_id in [pair['id1']]]
-                promising_group2 = [fragments[fragment_id] for fragment_id in [pair['id2']]]
-                pair_tuple = (tuple(map(tuple, promising_group1)), tuple(map(tuple, promising_group2)))
-                
-                # Check if the pair is not already in group_preferences
-                if pair_tuple not in existing_pairs:
-                    # Simulate user decision for the new pair
-                    group1, group2, preference, decision = self.simulate_user_decision(promising_group1, promising_group2, self.std_dev)
-                    
-                    # Add the new pair to group_preferences
-                    group_preferences.append({
-                        'group1': group1,
-                        'group2': group2,
-                        'preference': preference
-                    })
-
         print(f"Mean group size: {total_group_size / sampled_pairs}")
 
         print('group_preferences', len(group_preferences))
@@ -2008,6 +1985,44 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         print("\nDecision counts:")
         for decision, count in decision_counts.items():
             print(f"{decision}: {count}")
+            
+        # Get the most promising pairs
+        most_promising_pairs = self.most_promising_1v1_comparisons(fragments, num_pairs)
+
+        # Convert fragment_pairs to a list of tuples for efficient lookup
+        existing_pairs = [(pair[0], pair[1]) for pair in fragment_pairs]
+
+        for most_promising_pair in most_promising_pairs:
+            # Generate a new pair
+            new_pair = [fragments[most_promising_pair['id1']], fragments[most_promising_pair['id2']]]
+
+            # Convert the new pair to a tuple for comparison
+            new_pair_tuple = (new_pair[0], new_pair[1])
+
+            # Check if the new pair is not already in fragment_pairs
+            if new_pair_tuple not in existing_pairs and (new_pair_tuple[1], new_pair_tuple[0]) not in existing_pairs:
+                # Add the new pair to fragment_pairs
+                fragment_pairs.append(new_pair)
+
+                # Generate a preference for the new pair
+                reward_sum1 = self._noisy_reward_sums(new_pair[0], self.std_dev)
+                reward_sum2 = self._noisy_reward_sums(new_pair[1], self.std_dev)
+                if reward_sum1 > reward_sum2:
+                    new_preference = 1.0
+                elif reward_sum1 < reward_sum2:
+                    new_preference = 0.0
+                else:
+                    new_preference = 0.5
+
+                # Add the new preference to preferences
+                preferences.append(new_preference)
+
+                # Add the new pair to existing_pairs
+                existing_pairs.append(new_pair_tuple)
+
+            # Break the loop when we have enough pairs
+            if len(fragment_pairs) >= num_pairs:
+                break
             
         print(f"Generated {len(preferences)} preferences")
         return fragment_pairs, np.array(preferences, dtype=np.float32)
@@ -3310,7 +3325,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             if isinstance(self.preference_gatherer, HumanGathererAPI):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
-                    fragment_pairs, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*2)
+                    fragment_pairs, preferences = self.preference_gatherer(trajectories, self.fragment_length, num_pairs, round_time_limit=num_pairs*3)
             elif isinstance(self.fragmenter, AbsoluteUncertaintyFragmenter):
                 self.logger.log("Creating fragment pairs")
                 #num_fragments = sum([math.floor(len(traj) / self.fragment_length) for traj in trajectories])
@@ -3322,7 +3337,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 with self.logger.accumulate_means("preferences"):
                     self.logger.log("Gathering preferences")
                     start_time = time.time()
-                    fragment_pairs, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs, round_time_limit=num_pairs*2)
+                    fragment_pairs, preferences = self.preference_gatherer(fragments, fragment_length=self.fragment_length, num_pairs=num_pairs, round_time_limit=num_pairs*3)
                     end_time = time.time()
                     self.logger.log(f"Preference gathering took {end_time - start_time} seconds")
             elif isinstance(self.preference_gatherer, SyntheticGatherer):
