@@ -16,15 +16,15 @@ import stable_baselines3.common.logger as sb_logger
 rng = np.random.default_rng(0)
 def intantiate_and_train(pairwise, tb_log_name):
     # make sure that max_episode_steps is divisible by fragment_length
-    total_timesteps = 100_000
-    total_comparisons = 500
-    rounds = 9
+    total_timesteps = 50_000
+    total_comparisons = 300
+    rounds = 4
     max_episode_steps = 2000
     fragment_length = 25
     gravity = -9.81
-    std_dev = 0.0 # irrationality
-    final_training_timesteps = 900_000
-    logs_folder = 'compare_feedback_types_no_noise'
+    std_dev = 0.25 # irrationality
+    final_training_timesteps = 1_750_000
+    logs_folder = 'compare_feedback_types_only_healthy_reward'
 
     venv = make_vec_env("Hopper-v4", rng=rng, render_mode='rgb_array', n_envs=8, max_episode_steps=max_episode_steps, env_make_kwargs={'terminate_when_unhealthy': False}, gravity=gravity)
 
@@ -140,10 +140,10 @@ def intantiate_and_train(pairwise, tb_log_name):
     trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
 
-for i in range(10):
+for i in range(1):
     print(f"Group comparison {i}")
     intantiate_and_train(False, f"groupwise_{i}")
 
-for i in range(10):
+for i in range(1):
     print(f"Pairwise comparison {i}")
     intantiate_and_train(True, f"pairwise_{i}")

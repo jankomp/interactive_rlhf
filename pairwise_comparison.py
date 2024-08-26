@@ -26,8 +26,8 @@ every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
 final_training_timesteps = 1_450_000
-logs_folder = 'logs_0820_01'
-tb_log_name = 'pairwise_comparison'
+logs_folder = 'user_study'
+tb_log_name = 'pairwise_comparison_01'
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -171,7 +171,22 @@ pref_comparisons.train(
 print(f"Training the learner for {final_training_timesteps} timesteps")
 trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
-from stable_baselines3.common.evaluation import evaluate_policy
+def evaluate_policy(policy, venv, n_eval_episodes=10):
+    rewards = []
+    for _ in range(n_eval_episodes):
+        obs = venv.reset()
+        done = [False] * venv.num_envs
+        episode_reward = 0
+        has_been_unhealthy = np.zeros(venv.num_envs, dtype=bool)
+        while not all(done):
+            action, _ = policy.predict(obs)
+            obs, reward, done, info = venv.step(action)
+            is_healthy = np.array([i.get('is_healthy', True) for i in info])
+            has_been_unhealthy |= ~is_healthy
+            healthy_reward = reward * (not has_been_unhealthy)
+            episode_reward += healthy_reward
+        rewards.append(episode_reward)
+    return np.mean(rewards), np.std(rewards)
 
 learner = trajectory_generator.algorithm
 n_eval_episodes = 100
@@ -179,11 +194,11 @@ reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
-learner.save(logs_folder + '/rlhf_pairwise_policy_model_' + chosen_environment_short_name)
-print(f"Model saved as rlhf_pairwise_policy_model_{chosen_environment_short_name}")
+learner.save(logs_folder + '/' + tb_log_name + '_policy_model_' + chosen_environment_short_name)
+print("Model saved as " + tb_log_name + f"_policy_model_{chosen_environment_short_name}")
 
-preference_model.save_model(logs_folder + f"/rlhf_pairwise_preference_model_{chosen_environment_short_name}")
-print(f"Model saved as rlhf_pairwise_preference_model_{chosen_environment_short_name}")
+preference_model.save_model(logs_folder + "/" + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
+print("Model saved as " + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
 
 from gymnasium.wrappers import RecordVideo
 

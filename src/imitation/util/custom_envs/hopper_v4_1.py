@@ -271,6 +271,7 @@ class HopperEnv(MujocoEnv, utils.EzPickle):
         info = {
             "x_position": x_position_after,
             "x_velocity": x_velocity,
+            "is_healthy": self.is_healthy,
         }
 
         if self.render_mode == "human":
