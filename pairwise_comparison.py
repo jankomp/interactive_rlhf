@@ -171,7 +171,9 @@ pref_comparisons.train(
 print(f"Training the learner for {final_training_timesteps} timesteps")
 trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
-def evaluate_policy(policy, venv, n_eval_episodes=10):
+from stable_baselines3.common.evaluation import evaluate_policy
+
+def evaluate_policy_healthy_reward(policy, venv, n_eval_episodes=10):
     rewards = []
     for _ in range(n_eval_episodes):
         obs = venv.reset()
@@ -183,13 +185,17 @@ def evaluate_policy(policy, venv, n_eval_episodes=10):
             obs, reward, done, info = venv.step(action)
             is_healthy = np.array([i.get('is_healthy', True) for i in info])
             has_been_unhealthy |= ~is_healthy
-            healthy_reward = reward * (not has_been_unhealthy)
+            healthy_reward = reward * np.logical_not(has_been_unhealthy)
             episode_reward += healthy_reward
         rewards.append(episode_reward)
     return np.mean(rewards), np.std(rewards)
 
 learner = trajectory_generator.algorithm
 n_eval_episodes = 100
+reward_mean, reward_std = evaluate_policy_healthy_reward(learner.policy, venv, n_eval_episodes)
+reward_stderr = reward_std / np.sqrt(n_eval_episodes)
+print(f"Only healthy reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
+
 reward_mean, reward_std = evaluate_policy(learner.policy, venv, n_eval_episodes)
 reward_stderr = reward_std / np.sqrt(n_eval_episodes)
 print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
