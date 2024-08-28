@@ -1884,7 +1884,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         return fragments, preferences
 
-    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 8) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 4) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather synthetic preferences for the given fragment pairs."""
         fragment_pairs = []
         fragment_tree = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
@@ -1985,7 +1985,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         print("\nDecision counts:")
         for decision, count in decision_counts.items():
             print(f"{decision}: {count}")
-            
+
         # Get the most promising pairs
         most_promising_pairs = self.most_promising_1v1_comparisons(fragments, num_pairs)
 
@@ -2393,7 +2393,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return limited_pairs
 
 
-    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size: int = 8) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size: int = 4) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         preferences = []
@@ -2411,9 +2411,20 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         #filter the nodes to only include the lowest two levels except the leaf nodes
         non_leaf_nodes = self.filter_levels(self.fragments_for_frontend, levels=[1, 2], filtered_nodes=[])
         #filter those nodes based on the number of descending leaf nodes
-        non_leaf_nodes = [node_id for node_id in non_leaf_nodes if len(self.get_leaf_descendants(node_id, child_map)) <= max_suggested_group_size]
-        self.queries = self.forcing_group_active_learning_suggestions(child_map, non_leaf_nodes, fragments, repeat_limit=2)
+        # Initialize node_candidates
+        node_candidates = []
 
+        # Filter those nodes based on the number of descending leaf nodes
+        for node_id in non_leaf_nodes:
+            descendants = self.get_leaf_descendants(node_id, child_map)
+            if len(descendants) <= max_suggested_group_size:
+                node_candidates.append(node_id)
+            else:
+                # If the group is larger than max_suggested_group_size, consider each descendant as a separate group
+                node_candidates.extend(descendants)
+
+        self.queries = self.forcing_group_active_learning_suggestions(child_map, node_candidates, fragments, repeat_limit=2)
+        
         self.current_fragments_hash = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
         end_time = time.time()
         self.logger.log(f"Hierarchical clustering took {end_time - start_time} seconds")
@@ -2452,11 +2463,12 @@ class FeedbackLogger:
         # Open the file in the specified directory
         self.file = open(os.path.join(dirname, filename), 'w', newline='')
         self.writer = csv.writer(self.file)
-        self.writer.writerow(['Total Preferences', 'Incorrect Preferences', 'Avg Correctness (Correct)', 'Avg Correctness (Incorrect)', 'Avg Correctness (Equal)'])
+        self.writer.writerow(['Total Preferences', 'Incorrect Preferences', 'Incorrect equal preferences', 'Avg Correctness (Correct)', 'Avg Correctness (Incorrect)', 'Avg Correctness (Equal)'])
     
     def __call__(self, fragment_pairs, preferences):
         total_preferences = len(preferences)
         correct_preferences = 0
+        incorrect_equal_preferences = 0
         correct_comparisons = []
         incorrect_comparisons = []
         incorrect_equal_comparisons = []
@@ -2470,6 +2482,7 @@ class FeedbackLogger:
             elif preference == -1.0 and true_reward1 >= true_reward2:
                 incorrect_comparisons.append(abs(true_reward1 - true_reward2))
             elif preference == 0.5 and true_reward1 != true_reward2:
+                incorrect_equal_preferences += 1
                 incorrect_equal_comparisons.append(abs(true_reward1 - true_reward2))
             else:
                 correct_preferences += 1
@@ -2479,7 +2492,7 @@ class FeedbackLogger:
         avg_correctness_incorrect = statistics.mean(incorrect_comparisons) if incorrect_comparisons else 0
         avg_equal_incorrect = statistics.mean(incorrect_equal_comparisons) if incorrect_equal_comparisons else 0
 
-        self.writer.writerow([total_preferences, total_preferences - correct_preferences, avg_correctness_correct, avg_correctness_incorrect, avg_equal_incorrect])
+        self.writer.writerow([total_preferences, total_preferences - correct_preferences, incorrect_equal_preferences, avg_correctness_correct, avg_correctness_incorrect, avg_equal_incorrect])
 
     def _reward_sums(self, fragment_pairs) -> Tuple[np.ndarray, np.ndarray]:
         rews1, rews2 = zip(

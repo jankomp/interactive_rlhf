@@ -16,18 +16,18 @@ from imitation.util import logger
 import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
-total_timesteps = 50_000
-total_comparisons = 300
-rounds = 4
+total_timesteps = 140_000
+total_comparisons = 420
+rounds = 6
 initial_comparison_frac = 1 / (rounds + 1) # We want to keep all the comparison rounds constant
 max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
 fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 1_450_000
-logs_folder = 'user_study'
-tb_log_name = 'pairwise_comparison_01'
+final_training_timesteps = 2_000_000
+logs_folder = 'pilot_study_2'
+tb_log_name = 'pairwise_comparison_00'
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
