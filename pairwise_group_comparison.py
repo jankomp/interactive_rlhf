@@ -27,7 +27,7 @@ fragment_length = 25 # make sure that max_episode_steps is divisible by fragment
 every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 2_000_000
+final_training_timesteps = 20_000
 logs_folder = 'pilot_study_2'
 tb_log_name = 'groupwise_comparison_00'
 # END: PARAMETERS
