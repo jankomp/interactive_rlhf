@@ -2036,6 +2036,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
         augment_to_group_size = 10,
         preference_model: Optional[PreferenceModel] = None,
+        timed: Optional[bool] = True,
     ) -> None:
         super().__init__(rng=rng, custom_logger=custom_logger)
         self.augment_to_group_size = augment_to_group_size
@@ -2045,6 +2046,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.total_feedbacks = 0
         self.round_time_limit = 0
         self.timer = None
+        self.timed = timed
         self.preference_model = preference_model
         self.current_fragments_hash = None
         self.progress = 0
@@ -2437,7 +2439,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
             self.timer = TimerThread()
             self.timer.start()
             self.timer.unblock()
-            while  self.timer.get_elapsed_time() < round_time_limit:
+            stop = False
+            while not stop:
                 new_fragment_pairs, new_preferences = self.queue.get()
                 self.timer.unblock()
                 
@@ -2448,6 +2451,11 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                 print(f'Preferences: {len(preferences)}')
                 print(f'Fragment pairs: {len(fragment_pairs)}')
                 print(f'Elapsed time: {self.timer.get_elapsed_time()}/{round_time_limit}')
+                if self.timed:
+                    stop = self.timer.get_elapsed_time() < round_time_limit
+                else:
+                    stop = self.feedback_count >= num_pairs
+                    
             self.timer.block()
             self.logger.log(f"Feedback took {self.timer.get_elapsed_time()} seconds in total")
 

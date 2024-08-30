@@ -28,8 +28,8 @@ every_n_frames = 3 # when to record a frame
 gravity = -9.81
 environment_number = 1 # integer from 0 to 7
 final_training_timesteps = 20_000
-logs_folder = 'pilot_study_2'
-tb_log_name = 'groupwise_comparison_00'
+logs_folder = 'expert_study_1'
+tb_log_name = 'groupwise_comparison_05'
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -227,4 +227,4 @@ for _ in range(1000):
             
 
 env.close()
-gatherer.close()
+#gatherer.close()
