@@ -20,7 +20,7 @@ def evaluate_policies(name_prefix, range_end):
         print(f"Evaluating policy {name}")
 
         # BEGIN: PARAMETERS
-        logs_folder = 'user_study'
+        logs_folder = 'expert_study_1'
         n_eval_episodes = 100
         environment_number = 1 # integer from 0 to 7
         # END: PARAMETERS
@@ -46,11 +46,11 @@ def evaluate_policies(name_prefix, range_end):
         # Load the policy model
         agent = PPO.load(logs_folder + '/' + name + '_policy_model_' + chosen_environment_short_name)
         
-    reward_mean, reward_std = evaluate_policies(agent.policy, venv, n_eval_episodes)
-    reward_stderr = reward_std / np.sqrt(n_eval_episodes)
-    print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
+        reward_mean, reward_std = evaluate_policy(agent.policy, venv, n_eval_episodes)
+        reward_stderr = reward_std / np.sqrt(n_eval_episodes)
+        print(f"Reward: {reward_mean:.0f} +/- {reward_stderr:.0f}")
 
 
 
-evaluate_policies('pairwise_comparison_', 5, 2_000_000)
-evaluate_policies('groupwise_comparison_', 5, 2_000_000)
+evaluate_policies('pairwise_comparison_', 5)
+evaluate_policies('groupwise_comparison_', 5)
