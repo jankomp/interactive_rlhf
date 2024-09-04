@@ -24,9 +24,9 @@ def intantiate_and_train(pairwise, tb_log_name, total_comparisons, rounds, std_d
     gravity = -9.81
     std_dev = 0.25 # irrationality
     final_training_timesteps = 1_750_000
-    logs_folder = 'compare_feedback_types'
+    logs_folder = 'compare_feedback_types_x'
 
-    environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
+    environments = ['Walker2d-v4', 'Hopper-v4', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4', 'InvertedPendulum-v4', 'InvertedDoublePendulum-v4']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
     print(f"Chosen environment: {chosen_environment_short_name}")
