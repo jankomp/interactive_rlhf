@@ -14,7 +14,7 @@ import stable_baselines3.common.logger as sb_logger
 
 
 rng = np.random.default_rng(0)
-def intantiate_and_train(pairwise, tb_log_name):
+def intantiate_and_train(pairwise, tb_log_name, total_comparisons, rounds, std_dev, environment_number):
     # make sure that max_episode_steps is divisible by fragment_length
     total_timesteps = 50_000
     total_comparisons = 300
@@ -24,9 +24,25 @@ def intantiate_and_train(pairwise, tb_log_name):
     gravity = -9.81
     std_dev = 0.25 # irrationality
     final_training_timesteps = 1_750_000
-    logs_folder = 'compare_feedback_types_only_healthy_reward'
+    logs_folder = 'compare_feedback_types'
 
-    venv = make_vec_env("Hopper-v4", rng=rng, render_mode='rgb_array', n_envs=8, max_episode_steps=max_episode_steps, env_make_kwargs={'terminate_when_unhealthy': False}, gravity=gravity)
+    environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
+    chosen_environment = environments[environment_number]
+    chosen_environment_short_name = chosen_environment.split('-v')[0]
+    print(f"Chosen environment: {chosen_environment_short_name}")
+    env_make_kwargs = {'terminate_when_unhealthy': False}
+    if environment_number == 5:
+        env_make_kwargs = {}
+
+    venv = make_vec_env(
+        chosen_environment,
+        rng=rng,
+        render_mode='rgb_array',
+        n_envs=8,
+        max_episode_steps=max_episode_steps,
+        env_make_kwargs=env_make_kwargs,
+        gravity=gravity,
+    )
 
     reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
     reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
@@ -142,8 +158,8 @@ def intantiate_and_train(pairwise, tb_log_name):
 
 for i in range(1):
     print(f"Group comparison {i}")
-    intantiate_and_train(False, f"groupwise_{i}")
+    intantiate_and_train(False, f"groupwise_{i}", 300, 4, 0.25, 0)
 
 for i in range(1):
     print(f"Pairwise comparison {i}")
-    intantiate_and_train(True, f"pairwise_{i}")
+    intantiate_and_train(True, f"pairwise_{i}", 300, 4, 0.25, 0)
