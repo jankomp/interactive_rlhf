@@ -2469,7 +2469,7 @@ class FeedbackLogger:
             os.makedirs(dirname)
 
         # Open the file in the specified directory
-        self.file = open(os.path.join(dirname, filename), 'w', newline='')
+        self.file = open(os.path.join(dirname, filename), 'a', newline='')
         self.writer = csv.writer(self.file)
         self.writer.writerow(['Total Preferences', 'Incorrect Preferences', 'Incorrect equal preferences', 'Avg Correctness (Correct)', 'Avg Correctness (Incorrect)', 'Avg Correctness (Equal)'])
     
@@ -3112,6 +3112,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         query_schedule: Union[str, type_aliases.Schedule] = "hyperbolic",
         json_fragmenter: Optional[JsonFragmenter] = None,
         feedback_logger: Optional[FeedbackLogger] = None,
+        preference_dataset_name: Optional[str] = None,
     ) -> None:
         """Initialize the preference comparison trainer.
 
@@ -3276,6 +3277,15 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         self.dataset = PreferenceDataset(max_size=comparison_queue_size)
         self.json_fragmenter = json_fragmenter
         self.feedback_logger = feedback_logger
+        self.preference_dataset_name = preference_dataset_name
+
+        #load the preference dataset if it exists
+        if self.preference_dataset_name is not None:
+            try:
+                self.dataset = PreferenceDataset.load(self.preference_dataset_name)
+                print(f"Loaded preference dataset {self.preference_dataset_name}")
+            except FileNotFoundError:
+                print(f"Preference dataset {self.preference_dataset_name} not found")
 
     def train(
         self,
@@ -3331,7 +3341,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 end_time = time.time()
                 self.logger.log(f"Trajectory generation took {end_time - start_time} seconds")
                 # pop the last trajectory (since the video could not be saved correctly)
-                trajectories.pop()
+                #trajectories.pop()
 
                 # This assumes there are no fragments missing initial timesteps
                 # (but allows for fragments missing terminal timesteps).
@@ -3431,6 +3441,11 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
 
         if self.feedback_logger is not None:
                 self.feedback_logger.close()
+
+        #save preference dataset    
+        if self.preference_dataset_name is not None:
+            self.dataset.save(self.preference_dataset_name)
+            print(f"Preference dataset saved to {self.preference_dataset_name}")
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
     

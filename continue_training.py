@@ -12,6 +12,7 @@ import numpy as np
 import stable_baselines3.common.logger as sb_logger
 from imitation.util import logger
 from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1
+from gymnasium.wrappers import RecordVideo
 
 def continue_training(name_prefix, range_end, additional_timesteps):
     for i in range(range_end):
@@ -19,10 +20,11 @@ def continue_training(name_prefix, range_end, additional_timesteps):
         print(f"Training model {name}")
 
         # BEGIN: PARAMETERS
-        logs_folder = 'user_study'
+        logs_folder = 'case_study'
         tb_log_dir = logs_folder + '/tb_logs'
         tb_log_name = name
         environment_number = 1 # integer from 0 to 7
+        gravity = -5
         # END: PARAMETERS
 
         rng = np.random.default_rng(0)
@@ -39,7 +41,7 @@ def continue_training(name_prefix, range_end, additional_timesteps):
             rng=rng,
             n_envs=8,
             max_episode_steps=1000,
-            gravity=-9.81,
+            gravity=gravity,
             env_make_kwargs=env_make_kwargs,
         )
 
@@ -74,6 +76,18 @@ def continue_training(name_prefix, range_end, additional_timesteps):
         print("Model saved as " + tb_log_name + f"_preference_model_{chosen_environment}")
 
 
+        # Create the environment
+        env = gym.make(chosen_environment, render_mode='rgb_array', max_episode_steps=1000, terminate_when_unhealthy=False)
+        env.model.opt.gravity[2] = gravity
+        env = RecordVideo(env, logs_folder + '/videos', name_prefix=tb_log_name + '_' + chosen_environment_short_name, episode_trigger=lambda x: x % 1 == 0) 
+        # Run the model in the environment
+        obs, info = env.reset()
+        for _ in range(1000):
+                action, _states = agent.predict(obs, deterministic=True)
+                obs, reward, _ ,done, info = env.step(action)
+                if done:
+                    obs, info = env.reset()
 
-continue_training('pairwise_comparison_', 5, 2_000_000)
-continue_training('groupwise_comparison_', 5, 2_000_000)
+
+#continue_training('pairwise_comparison_', 5, 2_000_000)
+continue_training('groupwise_comparison_', 1, 2_000_000)

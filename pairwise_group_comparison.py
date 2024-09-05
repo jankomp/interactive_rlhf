@@ -18,18 +18,18 @@ from imitation.util import logger
 import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
-total_timesteps = 140_000
-total_comparisons = 420
-rounds = 6
+total_timesteps = 35_000
+total_comparisons = 200
+rounds = 7
 initial_comparison_frac = 1 / (rounds + 1) # We want to keep all the comparison rounds constant
-max_episode_steps = 1000 # make sure that max_episode_steps is divisible by fragment_length
-fragment_length = 25 # make sure that max_episode_steps is divisible by fragment_length
+max_episode_steps = 300 # make sure that max_episode_steps is divisible by fragment_length
+fragment_length = 50 # make sure that max_episode_steps is divisible by fragment_length
 every_n_frames = 3 # when to record a frame
-gravity = -9.81
+gravity = -5
 environment_number = 1 # integer from 0 to 7
-final_training_timesteps = 20_000
-logs_folder = 'expert_study_1'
-tb_log_name = 'groupwise_comparison_05'
+#final_training_timesteps = 100_000
+logs_folder = 'case_study'
+tb_log_name = 'groupwise_comparison_00'
 # END: PARAMETERS
 
 environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
@@ -73,16 +73,16 @@ venv = make_vec_env(
 reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
-preference_model = preference_comparisons.PreferenceModel(reward_net)
-#preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + f"/rlhf_groupwise_preference_model_{chosen_environment_short_name}", reward_net)
+#preference_model = preference_comparisons.PreferenceModel(reward_net)
+preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + "/" + tb_log_name + f"_preference_model_{chosen_environment_short_name}", reward_net)
 
 
 # Create a lambda updater
 scaling_factor = 0.1
-tolerable_interval = (0.9, 1.1) 
+tolerable_interval = (0.8, 1.0) 
 lambda_updater = IntervalParamScaler(scaling_factor, tolerable_interval)
 # Create a RegularizerFactory
-regularizer_factory = LpRegularizer.create(initial_lambda=0.1, lambda_updater=lambda_updater, p=2, val_split=0.1)
+regularizer_factory = LpRegularizer.create(initial_lambda=0.2, lambda_updater=lambda_updater, p=2, val_split=0.1)
 
 reward_trainer = preference_comparisons.EnsembleTrainer(
     preference_model,
@@ -104,39 +104,39 @@ fragmenter = preference_comparisons.AbsoluteUncertaintyFragmenter(
 )
 
 #gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
-gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(rng=rng, augment_to_group_size=1, preference_model=preference_model,)
+gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(rng=rng, augment_to_group_size=1, preference_model=preference_model, timed = False)
 
 # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
 # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,
 # ppo_lr, exploration_frac, num_iterations, initial_comparison_frac,
 # initial_epoch_multiplier, query_schedule) used in this example have been
 # approximately fine-tuned to reach a reasonable level of performance.
-agent = PPO(
-    policy=FeedForward32Policy,
-    policy_kwargs=dict(
-        features_extractor_class=NormalizeFeaturesExtractor,
-        features_extractor_kwargs=dict(normalize_class=RunningNorm),
-    ),
-    env=venv,
-    seed=0,
-    n_steps=2048 // venv.num_envs,
-    batch_size=64,
-    ent_coef=0.01,
-    learning_rate=2e-3,
-    clip_range=0.1,
-    gae_lambda=0.95,
-    gamma=0.97,
-    n_epochs=10,
-    tensorboard_log=logs_folder + "/tb_logs",
-)
-#agent = PPO.load('rlhf_groupwise_policy_model_' + chosen_environment_short_name)
+#agent = PPO(
+#    policy=FeedForward32Policy,
+#    policy_kwargs=dict(
+#        features_extractor_class=NormalizeFeaturesExtractor,
+#        features_extractor_kwargs=dict(normalize_class=RunningNorm),
+#    ),
+#    env=venv,
+#    seed=0,
+#    n_steps=2048 // venv.num_envs,
+#    batch_size=64,
+#    ent_coef=0.01,
+#    learning_rate=2e-3,
+#    clip_range=0.1,
+#    gae_lambda=0.95,
+#    gamma=0.97,
+#    n_epochs=10,
+#    tensorboard_log=logs_folder + "/tb_logs",
+#)
+agent = PPO.load(logs_folder + '/' + tb_log_name + '_policy_model_' + chosen_environment_short_name)
 
 trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
     reward_fn=reward_net,
     venv=venv,
     rng=rng,
-    exploration_frac=0.25,
+    exploration_frac=0.4,
 )
 
 
@@ -153,13 +153,14 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     preference_gatherer=gatherer,
     reward_trainer=reward_trainer,
     fragment_length=fragment_length,
-    transition_oversampling=1.2,
+    transition_oversampling=1.5,
     initial_comparison_frac=initial_comparison_frac,
     allow_variable_horizon=False,
     initial_epoch_multiplier=4,
     query_schedule="constant",
     #custom_logger=custom_logger,
     feedback_logger=feedback_logger,
+    preference_dataset_name=logs_folder + '/' + tb_log_name + '_preference_dataset.pkl',
 )
 
 pref_comparisons.train(
@@ -173,8 +174,8 @@ from imitation.rewards.reward_wrapper import RewardVecEnvWrapper
 learned_reward_venv = RewardVecEnvWrapper(venv, reward_net.predict_processed)
 
 
-print(f"Training the learner for {final_training_timesteps} timesteps")
-trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)
+#print(f"Training the learner for {final_training_timesteps} timesteps")
+#trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)
 
 from stable_baselines3.common.evaluation import evaluate_policy
 

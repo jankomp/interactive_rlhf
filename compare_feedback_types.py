@@ -29,6 +29,7 @@ def intantiate_and_train(pairwise, tb_log_name, total_comparisons, rounds, std_d
     environments = ['Walker2d-v4', 'Hopper-v4', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4', 'InvertedPendulum-v4', 'InvertedDoublePendulum-v4']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
+    tb_log_name = tb_log_name + '_' + chosen_environment_short_name
     print(f"Chosen environment: {chosen_environment_short_name}")
     env_make_kwargs = {'terminate_when_unhealthy': False}
     if environment_number == 5:
