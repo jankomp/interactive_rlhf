@@ -16,12 +16,12 @@ import stable_baselines3.common.logger as sb_logger
 rng = np.random.default_rng(0)
 def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_comparisons, rounds, std_dev, environment_number):
     # make sure that max_episode_steps is divisible by fragment_length
-    total_timesteps = 180_000
+    total_timesteps = 90_000
     initial_comparison_frac = 1 / (rounds + 1)
     max_episode_steps = 1000
     fragment_length = 25
     gravity = -9.81
-    final_training_timesteps = 1_800_000
+    final_training_timesteps = 1_900_000
     environments = ['Walker2d-v4', 'Hopper-v4', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4', 'InvertedPendulum-v4', 'InvertedDoublePendulum-v4']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
@@ -155,10 +155,10 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
 
-for i in range(10):
+for i in range(5):
     print(f"Group comparison {i}")
     intantiate_and_train(False, 'Synthetic_study', f"groupwise_{i}", 1000, 9, 1.5, 0)
 
-for i in range(10):
+for i in range(5):
     print(f"Pairwise comparison {i}")
     intantiate_and_train(True, 'Synthetic_study', f"pairwise_{i}", 1000, 9, 0.25, 0)
