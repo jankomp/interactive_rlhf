@@ -14,18 +14,14 @@ import stable_baselines3.common.logger as sb_logger
 
 
 rng = np.random.default_rng(0)
-def intantiate_and_train(pairwise, tb_log_name, total_comparisons, rounds, std_dev, environment_number):
+def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_comparisons, rounds, std_dev, environment_number):
     # make sure that max_episode_steps is divisible by fragment_length
-    total_timesteps = 50_000
-    total_comparisons = 300
-    rounds = 4
-    max_episode_steps = 2000
+    total_timesteps = 180_000
+    initial_comparison_frac = 1 / (rounds + 1)
+    max_episode_steps = 1000
     fragment_length = 25
     gravity = -9.81
-    std_dev = 0.25 # irrationality
-    final_training_timesteps = 1_750_000
-    logs_folder = 'compare_feedback_types_x'
-
+    final_training_timesteps = 1_800_000
     environments = ['Walker2d-v4', 'Hopper-v4', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4', 'InvertedPendulum-v4', 'InvertedDoublePendulum-v4']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
@@ -34,6 +30,8 @@ def intantiate_and_train(pairwise, tb_log_name, total_comparisons, rounds, std_d
     env_make_kwargs = {'terminate_when_unhealthy': False}
     if environment_number == 5:
         env_make_kwargs = {}
+
+    logs_folder = logs_folder_top + '/' + chosen_environment_short_name
 
     venv = make_vec_env(
         chosen_environment,
@@ -139,7 +137,7 @@ def intantiate_and_train(pairwise, tb_log_name, total_comparisons, rounds, std_d
         reward_trainer=reward_trainer,
         fragment_length=fragment_length,
         transition_oversampling=1,
-        initial_comparison_frac=0.1,
+        initial_comparison_frac=initial_comparison_frac,
         allow_variable_horizon=False,
         initial_epoch_multiplier=4,
         query_schedule="constant",
@@ -157,10 +155,10 @@ def intantiate_and_train(pairwise, tb_log_name, total_comparisons, rounds, std_d
     trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
 
-for i in range(1):
+for i in range(10):
     print(f"Group comparison {i}")
-    intantiate_and_train(False, f"groupwise_{i}", 300, 4, 0.25, 0)
+    intantiate_and_train(False, 'Synthetic_study', f"groupwise_{i}", 1000, 9, 1.5, 0)
 
-for i in range(1):
+for i in range(10):
     print(f"Pairwise comparison {i}")
-    intantiate_and_train(True, f"pairwise_{i}", 300, 4, 0.25, 0)
+    intantiate_and_train(True, 'Synthetic_study', f"pairwise_{i}", 1000, 9, 0.25, 0)

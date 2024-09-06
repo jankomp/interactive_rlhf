@@ -1774,29 +1774,6 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         return limited_pairs
     
-    def most_promising_1v1_comparisons(self, fragments: Sequence[TrajectoryWithRew], num_pairs: int):
-        # Generate all possible pairs with their ids
-        fragment_pairs = list(itertools.combinations(enumerate(fragments), 2))
-
-        id_variance_pairs = []
-        for fragment_pair in fragment_pairs:
-            (id1, frag1), (id2, frag2) = fragment_pair
-            trans1 = rollout.flatten_trajectories([frag1])
-            trans2 = rollout.flatten_trajectories([frag2])
-            with th.no_grad():
-                rews1 = self.preference_model.rewards(trans1)
-                rews2 = self.preference_model.rewards(trans2)
-            # always calculate the uncertainty on logit
-            returns1, returns2 = rews1.sum(0), rews2.sum(0)
-            var_estimate = (returns1 - returns2).var().item()
-            id_variance_pairs.append({"id1": id1, "id2": id2, "var": var_estimate})
-
-        # Sort the pairs by variance in descending order
-        id_variance_pairs.sort(key=lambda x: x["var"], reverse=True)
-         # Return the first num_pairs elements
-        #return id_variance_pairs[:num_pairs]
-        return id_variance_pairs
-    
     def build_parent_map(self, node, parent_map=None):
         if parent_map is None:
             parent_map = {}
@@ -1884,7 +1861,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         return fragments, preferences
 
-    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 4) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 6) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather synthetic preferences for the given fragment pairs."""
         fragment_pairs = []
         fragment_tree = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
@@ -1896,12 +1873,16 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         child_map = self.build_child_map(fragment_tree)
         #filter the nodes to only include the lowest two levels except the leaf nodes
         non_leaf_nodes = self.filter_levels(fragment_tree, levels=[1, 2], filtered_nodes=[])
-        #filter those nodes based on the number of descending leaf nodes
-        non_leaf_nodes = [node_id for node_id in non_leaf_nodes if len(self.get_leaf_descendants(node_id, child_map)) <= max_suggested_group_size]
-
-        #print('Parent map: ', parent_map)
-        #print('\n')
-        #print('Child_map: ', child_map)
+        # Initialize node_candidates
+        node_candidates = []
+        # Filter those nodes based on the number of descending leaf nodes
+        for node_id in non_leaf_nodes:
+            descendants = self.get_leaf_descendants(node_id, child_map)
+            if len(descendants) <= max_suggested_group_size:
+                node_candidates.append(node_id)
+            else:
+                # If the group is larger than max_suggested_group_size, consider each descendant as a separate group
+                node_candidates.extend(descendants)
         
         group_preferences = []
         preferences = []
@@ -1965,11 +1946,11 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
                     'group2': group2,
                     'preference': preference
                 })
-            feedback_counter += max(len(group1), len(group2))
+            feedback_counter += 1
             if feedback_counter >= num_pairs:
                 break
 
-        print(f"Mean group size: {total_group_size / sampled_pairs}")
+        print(f"Mean group size: {total_group_size / 2 / sampled_pairs}")
 
         print('group_preferences', len(group_preferences))
         for group_preference in group_preferences:
@@ -1985,44 +1966,6 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         print("\nDecision counts:")
         for decision, count in decision_counts.items():
             print(f"{decision}: {count}")
-
-        # Get the most promising pairs
-        most_promising_pairs = self.most_promising_1v1_comparisons(fragments, num_pairs)
-
-        # Convert fragment_pairs to a list of tuples for efficient lookup
-        existing_pairs = [(pair[0], pair[1]) for pair in fragment_pairs]
-
-        for most_promising_pair in most_promising_pairs:
-            # Generate a new pair
-            new_pair = [fragments[most_promising_pair['id1']], fragments[most_promising_pair['id2']]]
-
-            # Convert the new pair to a tuple for comparison
-            new_pair_tuple = (new_pair[0], new_pair[1])
-
-            # Check if the new pair is not already in fragment_pairs
-            if new_pair_tuple not in existing_pairs and (new_pair_tuple[1], new_pair_tuple[0]) not in existing_pairs:
-                # Add the new pair to fragment_pairs
-                fragment_pairs.append(new_pair)
-
-                # Generate a preference for the new pair
-                reward_sum1 = self._noisy_reward_sums(new_pair[0], self.std_dev)
-                reward_sum2 = self._noisy_reward_sums(new_pair[1], self.std_dev)
-                if reward_sum1 > reward_sum2:
-                    new_preference = 1.0
-                elif reward_sum1 < reward_sum2:
-                    new_preference = 0.0
-                else:
-                    new_preference = 0.5
-
-                # Add the new preference to preferences
-                preferences.append(new_preference)
-
-                # Add the new pair to existing_pairs
-                existing_pairs.append(new_pair_tuple)
-
-            # Break the loop when we have enough pairs
-            if len(fragment_pairs) >= num_pairs:
-                break
             
         print(f"Generated {len(preferences)} preferences")
         return fragment_pairs, np.array(preferences, dtype=np.float32)
