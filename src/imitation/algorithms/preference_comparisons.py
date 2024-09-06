@@ -1566,8 +1566,8 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         return False
         
     def simulate_user_decision(self, group1, group2, std_dev=0.1):
-        perceived_rewards_group1 = [self._noisy_reward_sums(fragment, std_dev) for fragment in group1]
-        perceived_rewards_group2 = [self._noisy_reward_sums(fragment, std_dev) for fragment in group2]
+        perceived_rewards_group1 = [self._noisy_reward_sum(fragment, std_dev) for fragment in group1]
+        perceived_rewards_group2 = [self._noisy_reward_sum(fragment, std_dev) for fragment in group2]
         #print('perceived_rewards_group1', perceived_rewards_group1)
         #print('perceived_rewards_group2', perceived_rewards_group2)
 
@@ -1602,12 +1602,22 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
     
         return group1, group2, decision, decision_text
     
-    def _noisy_reward_sums(self, fragment, std_dev) -> np.ndarray:
-        #print(f"real_reward {rollout.discounted_sum(fragment.rews, self.discount_factor)}")
-        # Add Gaussian noise to each reward
-        noisy_rewards = fragment.rews + np.random.normal(0, std_dev, size=len(fragment.rews))
-        #print(f"noisy_reward {rollout.discounted_sum(noisy_rewards, self.discount_factor)}")
-        return rollout.discounted_sum(noisy_rewards, self.discount_factor)
+        # Function to apply Gaussian noise
+    def apply_gaussian_noise(self, true_reward, std_dev=0.1):
+        """
+        Apply Gaussian noise to true rewards.
+        :param true_rewards: array of true rewards
+        :param std_dev: standard deviation of the Gaussian noise
+        :return: array of perceived rewards with noise
+        """
+        noise = np.random.normal(0, std_dev)
+        perceived_reward = true_reward + noise
+        return perceived_reward
+    
+    def _noisy_reward_sum(self, fragment, std_dev) -> np.float32:
+        # Apply Gaussian noise to each reward before computing the discounted sum
+        noisy_reward_sum = rollout.discounted_sum(self.apply_gaussian_noise(fragment.rews, std_dev), self.discount_factor)
+        return np.float32(noisy_reward_sum)
     
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
         n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
@@ -1935,7 +1945,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
             group2_ids = self.get_leaf_descendants(node2_id, child_map)
             total_group_size += len(group1_ids) + len(group2_ids)
             sampled_pairs += 1
-            print(f"number of fragments in group1: {len(group1_ids)}, number of fragments in group2: {len(group2_ids)}")
+            #print(f"number of fragments in group1: {len(group1_ids)}, number of fragments in group2: {len(group2_ids)}")
             group1 = [fragments[fragment_id] for fragment_id in group1_ids]
             group2 = [fragments[fragment_id] for fragment_id in group2_ids]
             group1, group2, preference, decision = self.simulate_user_decision(group1, group2, self.std_dev)
