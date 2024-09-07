@@ -2,13 +2,17 @@ import os
 import numpy as np
 import tensorflow as tf
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+import matplotlib.pyplot as plt
 
 # The parent directory where your log files are stored
-log_dir = 'compare_feedback_types'
+log_dir = 'compare_feedback_types/tb_logs'
+environment_short_name = 'Hopper'
+groupwise_number_of_runs = 10
+pairwise_number_of_runs = 10
 
 # The names of the runs you want to process
-groupwise_runs = [f'groupwise_{i}_0' for i in range(10)]
-pairwise_runs = [f'pairwise_{i}_0' for i in range(10)]
+groupwise_runs = [f'groupwise_{i}_{environment_short_name}_0' for i in range(groupwise_number_of_runs)]
+pairwise_runs = [f'pairwise_{i}_{environment_short_name}_0' for i in range(pairwise_number_of_runs)]
 
 # The name of the scalar you want to process
 scalar_name = 'rollout/ep_rew_mean'
@@ -38,11 +42,25 @@ def process_runs(runs, scalar_name):
 groupwise_steps, groupwise_mean, groupwise_std = process_runs(groupwise_runs, scalar_name)
 pairwise_steps, pairwise_mean, pairwise_std = process_runs(pairwise_runs, scalar_name)
 
-# Write the new summary files
-with tf.summary.create_file_writer('groupwise_mean').as_default():
-    for step, value in zip(groupwise_steps, groupwise_mean):
-        tf.summary.scalar(scalar_name, value, step=step)
+# Create a new figure
+plt.figure()
 
-with tf.summary.create_file_writer('pairwise_mean').as_default():
-    for step, value in zip(pairwise_steps, pairwise_mean):
-        tf.summary.scalar(scalar_name, value, step=step)
+plt.title(f'{environment_short_name} - Groupwise vs Pairwise Feedback')
+
+#label the axes
+plt.xlabel('Steps')
+plt.ylabel('True reward')
+
+# Plot the mean and standard deviation for groupwise
+plt.plot(groupwise_steps, groupwise_mean, label=f'Groupwise Mean across {groupwise_number_of_runs} runs')
+plt.fill_between(groupwise_steps, groupwise_mean - groupwise_std, groupwise_mean + groupwise_std, alpha=0.1)
+
+# Plot the mean and standard deviation for pairwise
+plt.plot(pairwise_steps, pairwise_mean, label=f'Pairwise Mean accross {pairwise_number_of_runs} runs')
+plt.fill_between(pairwise_steps, pairwise_mean - pairwise_std, pairwise_mean + pairwise_std, alpha=0.1)
+
+# Add a legend
+plt.legend(loc='upper left')
+
+# Show the plot
+plt.show()
