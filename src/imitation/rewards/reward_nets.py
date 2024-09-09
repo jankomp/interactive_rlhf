@@ -428,7 +428,7 @@ class BasicRewardNet(RewardNet):
             combined_size += 1
 
         full_build_mlp_kwargs: Dict[str, Any] = {
-            "hid_sizes": (32, 32), # "hid_sizes": (64, 64),
+            "hid_sizes": (64, 64),
             **kwargs,
             # we do not want the values below to be overridden
             "in_size": combined_size,

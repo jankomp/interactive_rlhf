@@ -1532,6 +1532,8 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         use_active_learning = False,
         std_dev = 0.1,
         preference_model: Optional[PreferenceModel] = None,
+        clustering_levels: int = 4,
+        constant_tree_level_size = True
     ) -> None:
         super().__init__(rng=rng, custom_logger=custom_logger)
         self.augment_to_group_size = augment_to_group_size
@@ -1539,6 +1541,8 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         self.use_active_learning = use_active_learning
         self.std_dev = std_dev
         self.preference_model = preference_model
+        self.clustering_levels = clustering_levels
+        self.constant_tree_level_size = constant_tree_level_size
 
     def check_overlap(self, group1, group2, reward_border):
         """
@@ -1640,16 +1644,24 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         clustering = AgglomerativeClustering(metric='precomputed', linkage='complete', compute_distances=True).fit(dist_matrix)
 
         # Convert the children_ attribute to a tree structure
-        tree = self.children_to_tree(clustering.children_, clustering.distances_, fragments, 4)
+        tree = self.children_to_tree(clustering.children_, clustering.distances_, fragments, self.clustering_levels)
 
         return tree
+
+    def generate_level_distances(self, total_distance, n_levels):
+        sequence = np.linspace(1, 0, n_levels+1)[:-1]
+        sequence /= sequence.sum()
+        return np.cumsum(sequence * total_distance)
     
     def children_to_tree(self, children, distances, fragments, n_levels):
         nodes = [{"id": i, "level": 0} for i, _ in enumerate(fragments)]
+        level_distances = list(enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1))
+        if not self.constant_tree_level_size:
+            level_distances = list(enumerate(self.generate_level_distances(distances[-1], n_levels + 1)[1:], start=1))  
 
         for i, (left_child, right_child) in enumerate(children):
             distance = distances[i]
-            level = next((l for l, level_distance in enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1) if distance < level_distance), n_levels)
+            level = next((l for l, level_distance in level_distances if distance < level_distance), n_levels)
             node = {"id": len(nodes), "level": level, "children": [nodes[left_child], nodes[right_child]]}
             nodes.append(node)
 

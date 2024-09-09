@@ -11,24 +11,24 @@ from stable_baselines3 import PPO
 import numpy as np
 from imitation.util import logger
 import stable_baselines3.common.logger as sb_logger
+from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1
 
 
 rng = np.random.default_rng(0)
 def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_comparisons, rounds, std_dev, environment_number):
     # make sure that max_episode_steps is divisible by fragment_length
-    total_timesteps = 90_000
-    initial_comparison_frac = 1 / (rounds + 1)
+    total_timesteps = 45_000
     max_episode_steps = 1000
     fragment_length = 25
     gravity = -9.81
-    final_training_timesteps = 900_000
-    environments = ['Walker2d-v4', 'Hopper-v4', 'Swimmer-v4', 'HalfCheetah-v4', 'Ant-v4', 'Reacher-v4', 'InvertedPendulum-v4', 'InvertedDoublePendulum-v4']
+    final_training_timesteps = 2_000_000
+    environments = [ 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1', 'Walker2d-v4.1', 'Ant-v4.1', 'Pusher-v4.1']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
     tb_log_name = tb_log_name + '_' + chosen_environment_short_name
     print(f"Chosen environment: {chosen_environment_short_name}")
     env_make_kwargs = {'terminate_when_unhealthy': False}
-    if environment_number == 5:
+    if environment_number == 1 or environment_number == 2 or environment_number == 3:
         env_make_kwargs = {}
 
     logs_folder = logs_folder_top + '/' + chosen_environment_short_name
@@ -90,12 +90,21 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
             2.0,
             rng=rng,
         )
-        gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model)
+        clustering_levels = 4
+        if chosen_environment_short_name == 'HalfCheetah':
+            print('Clustering the levels differently because HalfCheetah is more complex')
+            gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels, constant_tree_level_size=False)
+        else:        
+            gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels)
+     
     # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
     # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,
     # ppo_lr, exploration_frac, num_iterations, initial_comparison_frac,
     # initial_epoch_multiplier, query_schedule) used in this example have been
     # approximately fine-tuned to reach a reasonable level of performance.
+    ent_coef = 0.01
+    if chosen_environment_short_name == 'Swimmer':
+        ent_coef = 0.001
     agent = PPO(
         policy=FeedForward32Policy,
         policy_kwargs=dict(
@@ -106,7 +115,7 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
         seed=0,
         n_steps=2048 // venv.num_envs,
         batch_size=64,
-        ent_coef=0.01,
+        ent_coef=ent_coef,
         learning_rate=2e-3,
         clip_range=0.1,
         gae_lambda=0.95,
@@ -137,7 +146,7 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
         reward_trainer=reward_trainer,
         fragment_length=fragment_length,
         transition_oversampling=1,
-        initial_comparison_frac=initial_comparison_frac,
+        initial_comparison_frac=0.25,
         allow_variable_horizon=False,
         initial_epoch_multiplier=4,
         query_schedule="hyperbolic",
@@ -154,12 +163,18 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     print(f"Training the learner for {final_training_timesteps} timesteps")
     trajectory_generator.train(final_training_timesteps, tb_log_name=tb_log_name)  # Note: set to 100_000 to train a proficient expert
 
+    policy_model = trajectory_generator.algorithm
+    policy_model.save(logs_folder + '/' + tb_log_name + '_policy_model_' + chosen_environment_short_name)
+    print("Model saved as " + tb_log_name + f" policy_model_{chosen_environment_short_name}")
 
-for environment in range(6):
+    preference_model.save_model(logs_folder + "/" + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
+    print("Model saved as " + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
+
+for environment_no in range(3, 8):
     for i in range(10):
         print(f"Group comparison {i}")
-        intantiate_and_train(False, 'Synthetic_study', f"groupwise_{i}", 500, 9, 0.25, environment)
+        intantiate_and_train(False, 'Synthetic_study', f"groupwise_{i}", 500, 9, 0.25, environment_no)
 
     for i in range(10):
         print(f"Pairwise comparison {i}")
-        intantiate_and_train(True, 'Synthetic_study', f"pairwise_{i}", 500, 9, 0.25, environment)
+        intantiate_and_train(True, 'Synthetic_study', f"pairwise_{i}", 500, 9, 0.25, environment_no)
