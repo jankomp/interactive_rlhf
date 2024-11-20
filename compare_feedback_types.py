@@ -21,14 +21,14 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     max_episode_steps = 1000
     fragment_length = 25
     gravity = -9.81
-    final_training_timesteps = 2_000_000
-    environments = [ 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1', 'Walker2d-v4.1', 'Ant-v4.1', 'Pusher-v4.1']
+    final_training_timesteps = 1_000
+    environments = [ 'HalfCheetah-v4.1', 'Reacher-v4.1', 'Walker2d-v4.1']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
     tb_log_name = tb_log_name + '_' + chosen_environment_short_name
     print(f"Chosen environment: {chosen_environment_short_name}")
     env_make_kwargs = {'terminate_when_unhealthy': False}
-    if environment_number == 1 or environment_number == 2 or environment_number == 3:
+    if environment_number == 1 or environment_number == 2 or environment_number == 3 or environment_number == 8:
         env_make_kwargs = {}
 
     logs_folder = logs_folder_top + '/' + chosen_environment_short_name
@@ -91,7 +91,7 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
             rng=rng,
         )
         clustering_levels = 4
-        if chosen_environment_short_name == 'HalfCheetah':
+        if chosen_environment_short_name == 'HalfCheetah' or chosen_environment_short_name == 'Pusher':
             print('Clustering the levels differently because HalfCheetah is more complex')
             gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels, constant_tree_level_size=False)
         else:        
@@ -170,11 +170,8 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     preference_model.save_model(logs_folder + "/" + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
     print("Model saved as " + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
 
-for environment_no in range(3, 8):
-    for i in range(10):
-        print(f"Group comparison {i}")
-        intantiate_and_train(False, 'Synthetic_study', f"groupwise_{i}", 500, 9, 0.25, environment_no)
 
-    for i in range(10):
-        print(f"Pairwise comparison {i}")
-        intantiate_and_train(True, 'Synthetic_study', f"pairwise_{i}", 500, 9, 0.25, environment_no)
+for environment_no in range(3):
+    for i in range(5):
+        print(f"Group comparison {i}")
+        intantiate_and_train(False, 'Synthetic_study_x', f"groupwise_{i}", 500, 9, 0.25, environment_no)

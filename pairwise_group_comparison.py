@@ -73,8 +73,8 @@ venv = make_vec_env(
 reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
 reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
 
-#preference_model = preference_comparisons.PreferenceModel(reward_net)
-preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + "/" + tb_log_name + f"_preference_model_{chosen_environment_short_name}", reward_net)
+preference_model = preference_comparisons.PreferenceModel(reward_net)
+#preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + "/" + tb_log_name + f"_preference_model_{chosen_environment_short_name}", reward_net)
 
 
 # Create a lambda updater
@@ -111,25 +111,25 @@ gatherer = preference_comparisons.HumanGathererForGroupComparisonsAPI(rng=rng, a
 # ppo_lr, exploration_frac, num_iterations, initial_comparison_frac,
 # initial_epoch_multiplier, query_schedule) used in this example have been
 # approximately fine-tuned to reach a reasonable level of performance.
-#agent = PPO(
-#    policy=FeedForward32Policy,
-#    policy_kwargs=dict(
-#        features_extractor_class=NormalizeFeaturesExtractor,
-#        features_extractor_kwargs=dict(normalize_class=RunningNorm),
-#    ),
-#    env=venv,
-#    seed=0,
-#    n_steps=2048 // venv.num_envs,
-#    batch_size=64,
-#    ent_coef=0.01,
-#    learning_rate=2e-3,
-#    clip_range=0.1,
-#    gae_lambda=0.95,
-#    gamma=0.97,
-#    n_epochs=10,
-#    tensorboard_log=logs_folder + "/tb_logs",
-#)
-agent = PPO.load(logs_folder + '/' + tb_log_name + '_policy_model_' + chosen_environment_short_name)
+agent = PPO(
+    policy=FeedForward32Policy,
+    policy_kwargs=dict(
+        features_extractor_class=NormalizeFeaturesExtractor,
+        features_extractor_kwargs=dict(normalize_class=RunningNorm),
+    ),
+    env=venv,
+    seed=0,
+    n_steps=2048 // venv.num_envs,
+    batch_size=64,
+    ent_coef=0.01,
+    learning_rate=2e-3,
+    clip_range=0.1,
+    gae_lambda=0.95,
+    gamma=0.97,
+    n_epochs=10,
+    tensorboard_log=logs_folder + "/tb_logs",
+)
+#agent = PPO.load(logs_folder + '/' + tb_log_name + '_policy_model_' + chosen_environment_short_name)
 
 trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
@@ -160,7 +160,7 @@ pref_comparisons = preference_comparisons.PreferenceComparisons(
     query_schedule="constant",
     #custom_logger=custom_logger,
     feedback_logger=feedback_logger,
-    preference_dataset_name=logs_folder + '/' + tb_log_name + '_preference_dataset.pkl',
+    #preference_dataset_name=logs_folder + '/' + tb_log_name + '_preference_dataset.pkl',
 )
 
 pref_comparisons.train(

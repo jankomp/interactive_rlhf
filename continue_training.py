@@ -89,5 +89,5 @@ def continue_training(name_prefix, range_end, additional_timesteps):
                     obs, info = env.reset()
 
 
-#continue_training('pairwise_comparison_', 5, 2_000_000)
-continue_training('groupwise_comparison_', 1, 2_000_000)
+continue_training('pairwise_', 10, 2_000_000)
+continue_training('groupwise_', 10, 2_000_000)

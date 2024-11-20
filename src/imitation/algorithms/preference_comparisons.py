@@ -1883,7 +1883,7 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         return fragments, preferences
 
-    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 6) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size = 8) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather synthetic preferences for the given fragment pairs."""
         fragment_pairs = []
         fragment_tree = self.hierarchical_clustering(fragments, fragment_length=fragment_length)
@@ -2002,6 +2002,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         augment_to_group_size = 10,
         preference_model: Optional[PreferenceModel] = None,
         timed: Optional[bool] = True,
+        constant_tree_level_size = True,
+        clustering_levels: int = 4,
     ) -> None:
         super().__init__(rng=rng, custom_logger=custom_logger)
         self.augment_to_group_size = augment_to_group_size
@@ -2035,6 +2037,8 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         print('Starting server in a new thread')
         self.server = ServerThread(self.app)
         self.server.start()
+        self.constant_tree_level_size = constant_tree_level_size
+        self.clustering_levels = clustering_levels
 
     def get_total_feedbacks(self):
         return jsonify({'given_feedbacks': self.feedback_count, 'total_feedbacks': self.total_feedbacks})
@@ -2152,16 +2156,24 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         clustering = AgglomerativeClustering(metric='precomputed', linkage='complete', compute_distances=True).fit(dist_matrix)
 
         # Convert the children_ attribute to a tree structure
-        tree = self.children_to_tree(clustering.children_, clustering.distances_, fragments, 4)
+        tree = self.children_to_tree(clustering.children_, clustering.distances_, fragments, self.clustering_levels)
 
         return tree
 
+    def generate_level_distances(self, total_distance, n_levels):
+        sequence = np.linspace(1, 0, n_levels+1)[:-1]
+        sequence /= sequence.sum()
+        return np.cumsum(sequence * total_distance)
+
     def children_to_tree(self, children, distances, fragments, n_levels):
         nodes = [{"id": i, "level": 0, "video_path": find_video_file(fragment.infos)} for i, fragment in enumerate(fragments)]
+        level_distances = list(enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1))
+        if not self.constant_tree_level_size:
+            level_distances = list(enumerate(self.generate_level_distances(distances[-1], n_levels + 1)[1:], start=1))  
 
         for i, (left_child, right_child) in enumerate(children):
             distance = distances[i]
-            level = next((l for l, level_distance in enumerate(np.linspace(0, distances[-1], n_levels + 1)[1:], start=1) if distance < level_distance), n_levels)
+            level = next((l for l, level_distance in level_distances if distance < level_distance), n_levels)
             node = {"id": len(nodes), "level": level, "children": [nodes[left_child], nodes[right_child]]}
             nodes.append(node)
 
@@ -2360,7 +2372,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         return limited_pairs
 
 
-    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size: int = 4) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
+    def __call__(self, fragments: Sequence[TrajectoryWithRew], fragment_length: int, num_pairs: int, round_time_limit: int, max_suggested_group_size: int = 8) -> Tuple[List[TrajectoryWithRewPair], np.ndarray]:
         """Gather human preferences for the given fragment pairs."""
         fragment_pairs = []
         preferences = []
@@ -2384,11 +2396,11 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         # Filter those nodes based on the number of descending leaf nodes
         for node_id in non_leaf_nodes:
             descendants = self.get_leaf_descendants(node_id, child_map)
-            if len(descendants) <= max_suggested_group_size:
+            if len(descendants) <= max_suggested_group_size and len(descendants) > 1:
                 node_candidates.append(node_id)
-            else:
+            #else:
                 # If the group is larger than max_suggested_group_size, consider each descendant as a separate group
-                node_candidates.extend(descendants)
+            #    node_candidates.extend(descendants)
 
         self.queries = self.forcing_group_active_learning_suggestions(child_map, node_candidates, fragments, repeat_limit=2)
         
@@ -2417,7 +2429,7 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
                 print(f'Fragment pairs: {len(fragment_pairs)}')
                 print(f'Elapsed time: {self.timer.get_elapsed_time()}/{round_time_limit}')
                 if self.timed:
-                    stop = self.timer.get_elapsed_time() < round_time_limit
+                    stop = self.timer.get_elapsed_time() > round_time_limit
                 else:
                     stop = self.feedback_count >= num_pairs
                     
