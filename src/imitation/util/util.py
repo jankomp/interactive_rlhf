@@ -135,7 +135,8 @@ def make_vec_env(
         env = gym.make(spec, render_mode=render_mode, max_episode_steps=max_episode_steps, **env_make_kwargs)
     
         if gravity is not None: 
-            env.model.opt.gravity[2] = gravity
+            if gravity is not None and hasattr(env, 'model') and hasattr(env.model, 'opt'):
+                env.model.opt.gravity[2] = gravity
         # Seed each environment with a different, non-sequential seed for diversity
         # (even if caller is passing us sequentially-assigned base seeds). int() is
         # necessary to work around gym bug where it chokes on numpy int64s.

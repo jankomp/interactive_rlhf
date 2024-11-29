@@ -1624,10 +1624,10 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         return np.float32(noisy_reward_sum)
     
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
-        n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
+        n_trajectory_components = len(np.atleast_1d(fragments[0].obs[0])) + len(np.atleast_1d(fragments[0].acts[0]))
         fragments_data = []
         for fragment in fragments:
-            fragment_data = np.concatenate([np.array(list(fragment.obs[i]) + list(fragment.acts[i])) for i in range(fragment_length)])
+            fragment_data = np.concatenate([np.array(list(np.atleast_1d(fragment.obs[i])) + list(np.atleast_1d(fragment.acts[i]))) for i in range(fragment_length)])
             fragments_data.append(fragment_data)
         fragments_data = np.array(fragments_data)
 
@@ -2136,10 +2136,10 @@ class HumanGathererForGroupComparisonsAPI(PreferenceGatherer):
         self.progress = progress
 
     def hierarchical_clustering(self, fragments: Sequence[TrajectoryWithRew], fragment_length) -> np.ndarray:
-        n_trajectory_components = len(fragments[0].obs[0]) + len(fragments[0].acts[0])
+        n_trajectory_components = len(np.atleast_1d(fragments[0].obs[0])) + len(np.atleast_1d(fragments[0].acts[0]))
         fragments_data = []
         for fragment in fragments:
-            fragment_data = np.concatenate([np.array(list(fragment.obs[i]) + list(fragment.acts[i])) for i in range(fragment_length)])
+            fragment_data = np.concatenate([np.array(list(np.atleast_1d(fragment.obs[i])) + list(np.atleast_1d(fragment.acts[i]))) for i in range(fragment_length)])
             fragments_data.append(fragment_data)
         fragments_data = np.array(fragments_data)
 

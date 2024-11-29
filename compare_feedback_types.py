@@ -11,7 +11,7 @@ from stable_baselines3 import PPO
 import numpy as np
 from imitation.util import logger
 import stable_baselines3.common.logger as sb_logger
-from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1
+from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v4_1, half_cheetah_v4_1, ant_v4_1, reacher_v4_1, inverted_pendulum_v4_1, inverted_double_pendulum_v4_1, grid_world
 
 
 rng = np.random.default_rng(0)
@@ -21,14 +21,16 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     max_episode_steps = 1000
     fragment_length = 25
     gravity = -9.81
+    if environment_number == 0:
+        gravity = None
     final_training_timesteps = 1_000
-    environments = [ 'HalfCheetah-v4.1', 'Reacher-v4.1', 'Walker2d-v4.1']
+    environments = ['GridWorld-v0.1', 'HalfCheetah-v4.1', 'Reacher-v4.1', 'Walker2d-v4.1']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
     tb_log_name = tb_log_name + '_' + chosen_environment_short_name
     print(f"Chosen environment: {chosen_environment_short_name}")
     env_make_kwargs = {'terminate_when_unhealthy': False}
-    if environment_number == 1 or environment_number == 2 or environment_number == 3 or environment_number == 8:
+    if environment_number == 0 or environment_number == 2 or environment_number == 3 or environment_number == 8:
         env_make_kwargs = {}
 
     logs_folder = logs_folder_top + '/' + chosen_environment_short_name
@@ -174,4 +176,4 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
 for environment_no in range(3):
     for i in range(5):
         print(f"Group comparison {i}")
-        intantiate_and_train(False, 'Synthetic_study_x', f"groupwise_{i}", 500, 9, 0.25, environment_no)
+        intantiate_and_train(False, 'New_envs', f"groupwise_{i}", 500, 9, 0.25, environment_no)
