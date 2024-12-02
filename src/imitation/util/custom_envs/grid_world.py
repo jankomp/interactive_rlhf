@@ -16,14 +16,15 @@ class GridWorldEnv(gym.Env):
         # Observations are flat arrays with the agent's and the target's location.
         self.observation_space = spaces.Box(0, size - 1, shape=(4,), dtype=int)
 
-        # We have 4 actions, corresponding to "right", "up", "left", "down", "right"
-        self.action_space = spaces.Discrete(4)
+        # We have 4 actions, corresponding to "no movement", "right", "up", "left", "down", "right"
+        self.action_space = spaces.Discrete(5)
 
         self._action_to_direction = {
-            0: np.array([1, 0]),
-            1: np.array([0, 1]),
-            2: np.array([-1, 0]),
-            3: np.array([0, -1]),
+            0: np.array([0, 0]),
+            1: np.array([1, 0]),
+            2: np.array([0, 1]),
+            3: np.array([-1, 0]),
+            4: np.array([0, -1]),
         }
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -67,7 +68,13 @@ class GridWorldEnv(gym.Env):
         self._agent_location = np.clip(
             self._agent_location + direction, 0, self.size - 1
         )
-        reward = 1 if np.array_equal(self._agent_location, self._target_location) else 0
+        
+        # Calculate the Euclidean distance to the target
+        distance_to_target = np.linalg.norm(self._agent_location - self._target_location)
+        
+        # Reward is inversely proportional to the distance to the target
+        reward = 1 / (distance_to_target + 1)  # Adding 1 to avoid division by zero
+
         terminated = np.array_equal(self._agent_location, self._target_location) if self.end_on_target else False
         observation = self._get_obs()
         info = self._get_info()

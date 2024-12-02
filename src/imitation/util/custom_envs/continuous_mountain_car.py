@@ -163,13 +163,14 @@ class Continuous_MountainCarEnv(gym.Env):
             velocity = 0
 
         # Convert a possible numpy bool to a Python bool.
-        rewarded = bool(
-            position >= self.goal_position and velocity >= self.goal_velocity
-        )
+        position_penalty = self.goal_position - abs(position) if abs(position) < self.goal_position else 0
+        velocity_penalty = self.goal_velocity - abs(velocity) if abs(velocity) < self.goal_velocity else 0
 
-        reward = 0
-        if rewarded:
+        if position >= self.goal_position and velocity >= self.goal_velocity:
             reward = 100.0
+        else:
+            reward = 0.0 - position_penalty - velocity_penalty
+
         reward -= math.pow(action[0], 2) * 0.1
 
         self.state = np.array([position, velocity], dtype=np.float32)
