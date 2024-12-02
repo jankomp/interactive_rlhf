@@ -19,7 +19,7 @@ import stable_baselines3.common.logger as sb_logger
 
 # BEGIN: PARAMETERS
 total_timesteps = 35_000
-total_comparisons = 200
+total_comparisons = 400
 rounds = 7
 initial_comparison_frac = 1 / (rounds + 1) # We want to keep all the comparison rounds constant
 max_episode_steps = 300 # make sure that max_episode_steps is divisible by fragment_length

@@ -180,6 +180,7 @@ class Continuous_MountainCarEnv(gym.Env):
 
         if self.render_mode == "human":
             self.render()
+            
         return self.state, reward, terminated, False, {}
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
@@ -188,6 +189,8 @@ class Continuous_MountainCarEnv(gym.Env):
         # state/observations.
         low, high = utils.maybe_parse_reset_bounds(options, -0.6, -0.4)
         self.state = np.array([self.np_random.uniform(low=low, high=high), 0])
+
+        self.current_step = 0
 
         if self.render_mode == "human":
             self.render()
