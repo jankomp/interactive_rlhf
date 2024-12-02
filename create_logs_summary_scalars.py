@@ -64,11 +64,11 @@ plt.ylabel('True reward')
 
 # Plot the mean and standard deviation for groupwise
 plt.plot(groupwise_steps, groupwise_mean, label=f'Groupwise Mean across {groupwise_number_of_runs} runs')
-#plt.fill_between(groupwise_steps, groupwise_mean - groupwise_std, groupwise_mean + groupwise_std, alpha=0.1)
+plt.fill_between(groupwise_steps, groupwise_mean - groupwise_std, groupwise_mean + groupwise_std, alpha=0.1)
 
 # Plot the mean and standard deviation for pairwise
 plt.plot(pairwise_steps, pairwise_mean, label=f'Pairwise Mean accross {pairwise_number_of_runs} runs')
-#plt.fill_between(pairwise_steps, pairwise_mean - pairwise_std, pairwise_mean + pairwise_std, alpha=0.1)
+plt.fill_between(pairwise_steps, pairwise_mean - pairwise_std, pairwise_mean + pairwise_std, alpha=0.1)
 
 # Add a legend
 plt.legend(loc='lower right')

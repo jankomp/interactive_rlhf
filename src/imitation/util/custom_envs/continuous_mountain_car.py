@@ -106,7 +106,7 @@ class Continuous_MountainCarEnv(gym.Env):
         "render_fps": 30,
     }
 
-    def __init__(self, render_mode: Optional[str] = None, goal_velocity=0, max_steps=200):
+    def __init__(self, render_mode: Optional[str] = None, goal_velocity=0, max_steps=250):
         self.min_action = -1.0
         self.max_action = 1.0
         self.min_position = -1.2
@@ -162,17 +162,15 @@ class Continuous_MountainCarEnv(gym.Env):
         if position == self.min_position and velocity < 0:
             velocity = 0
 
-        # Convert a possible numpy bool to a Python bool.
-        position_penalty = self.goal_position - abs(position) if abs(position) < self.goal_position else 0
-        velocity_penalty = self.goal_velocity - abs(velocity) if abs(velocity) < self.goal_velocity else 0
-
+ 
+        velocity_reward = 20*abs(velocity) - 0.1
+        position_reward = abs(position + 0.5) - 0.1
+        reward = position_reward + velocity_reward
         if position >= self.goal_position and velocity >= self.goal_velocity:
-            reward = 100.0
-        else:
-            reward = 0.0 - position_penalty - velocity_penalty
+            reward += 100.0
 
         reward -= math.pow(action[0], 2) * 0.1
-
+        #print(reward)
         self.state = np.array([position, velocity], dtype=np.float32)
 
         self.current_step += 1
