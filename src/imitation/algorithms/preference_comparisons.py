@@ -1533,7 +1533,8 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         std_dev = 0.1,
         preference_model: Optional[PreferenceModel] = None,
         clustering_levels: int = 4,
-        constant_tree_level_size = True
+        constant_tree_level_size = True,
+        vis_available = False,
     ) -> None:
         super().__init__(rng=rng, custom_logger=custom_logger)
         self.augment_to_group_size = augment_to_group_size
@@ -1543,8 +1544,9 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         self.preference_model = preference_model
         self.clustering_levels = clustering_levels
         self.constant_tree_level_size = constant_tree_level_size
+        self.vis_available = vis_available
 
-    def check_overlap(self, group1, group2, reward_border):
+    def check_overlap(self, group1_rews, group2_rews, reward_border):
         """
         Check if groups have significant overlap.
         :param group1: array of perceived rewards for group 1
@@ -1553,17 +1555,17 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         :return: boolean indicating if there is significant overlap
         """
         # Determine which group is smaller on average
-        average_group1 = sum(group1) / len(group1)
-        average_group2 = sum(group2) / len(group2)
+        average_group1 = sum(group1_rews) / len(group1_rews)
+        average_group2 = sum(group2_rews) / len(group2_rews)
 
         if average_group1 < average_group2:
-            overlap_group1 = [reward for reward in group1 if reward > reward_border]
-            overlap_group2 = [reward for reward in group2 if reward < reward_border]
+            overlap_group1 = [reward for reward in group1_rews if reward > reward_border]
+            overlap_group2 = [reward for reward in group2_rews if reward < reward_border]
         else:
-            overlap_group1 = [reward for reward in group1 if reward < reward_border]
-            overlap_group2 = [reward for reward in group2 if reward > reward_border]
+            overlap_group1 = [reward for reward in group1_rews if reward < reward_border]
+            overlap_group2 = [reward for reward in group2_rews if reward > reward_border]
 
-        if len(overlap_group1) > len(group1) / 2 or len(overlap_group2) > len(group2) / 2:
+        if len(overlap_group1) > len(group1_rews) / 2 or len(overlap_group2) > len(group2_rews) / 2:
             #print(f'discard groups: group1 {len(group1)} overlap {len(overlap_group1)} group2 {len(group2)} overlap {len(overlap_group2)}')
             return True
         #print('rate groups')
@@ -1704,6 +1706,44 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
         root = nodes[-1]
 
         return root
+    
+    def get_group_comparisons_through_visualization(self, child_map, node_candidates, fragments: Sequence[TrajectoryWithRew], repeat_limit=2):
+        # Precompute all the rewards for each fragment
+        frag_rewards_dict = {}
+        for frag_id, frag in enumerate(fragments):
+            frag_rewards_dict[frag_id] = frag.rews.sum()
+            
+        # Precompute all the descendants for each node
+        node_descendants_dict = {}
+        node_rewards_dict = {}
+        for node_id in node_candidates:
+            descendants = self.get_leaf_descendants(node_id, child_map)
+            node_descendants_dict[node_id] = descendants if len(descendants) != 0 else [node_id]
+
+            node_rewards_dict[node_id] = sum([frag_rewards_dict[desc] for desc in descendants])
+
+        # sort the nodes by their rewards
+        sorted_nodes = sorted(node_rewards_dict.items(), key=lambda x: x[1], reverse=True)
+
+        # generate comparisons from top to bottom. always compare with the closest node that is not overlapping
+        comparisons = []
+        descendant_count = {desc: 0 for desc in frag_rewards_dict.keys()}
+        for _ in range(repeat_limit):
+            for i, (node_id, _) in enumerate(sorted_nodes):
+                node_descendants = node_descendants_dict[node_id]
+                for j in range(i+1, len(sorted_nodes)):
+                    other_node_id, _ = sorted_nodes[j]
+                    other_node_descendants = node_descendants_dict[other_node_id]
+                    if not (set(node_descendants) & set(other_node_descendants)):
+                        # Check that each descendant occurs max repeat_limit times
+                        if all(descendant_count[desc] < repeat_limit for desc in node_descendants + other_node_descendants):
+                            comparisons.append((node_id, other_node_id))
+                            for desc in node_descendants + other_node_descendants:
+                                descendant_count[desc] += 1
+                            break
+
+        return comparisons
+
 
     def get_active_learning_suggestions(self, child_map, node_candidates, fragments: Sequence[TrajectoryWithRew], repeat_limit=2):
         # Precompute all the descendants for each node
@@ -1911,19 +1951,23 @@ class SyntheticGathererForGroupComparisons(PreferenceGatherer):
 
         sampled_nodes = []
         if self.use_active_learning:
-            # use active learning suggestions to sample two groups from fragment_tree
-            start_time = time.time()
-            #print('non_leaf_nodes', non_leaf_nodes)
-            active_learning_suggestions = self.get_active_learning_suggestions(child_map, non_leaf_nodes, fragments)
-            print(f"Active learning suggestions took {time.time() - start_time} seconds")
+            if self.vis_available:
+                sampled_nodes = self.get_group_comparisons_through_visualization(child_map, non_leaf_nodes, fragments)
+                print(f"Visual suggestions: {len(sampled_nodes)}")
+            else:
+                # use active learning suggestions to sample two groups from fragment_tree
+                start_time = time.time()
+                #print('non_leaf_nodes', non_leaf_nodes)
+                active_learning_suggestions = self.get_active_learning_suggestions(child_map, non_leaf_nodes, fragments)
+                print(f"Active learning suggestions took {time.time() - start_time} seconds")
 
-            #group_occurrences = Counter(str(pair["group1"]) for pair in active_learning_suggestions[:num_pairs])
-            #group_occurrences.update(str(pair["group2"]) for pair in active_learning_suggestions[:num_pairs])
-            #group_occurrences_sorted = dict(sorted(group_occurrences.items(), key=lambda item: item[1], reverse=True))
-            #print(group_occurrences_sorted)
+                #group_occurrences = Counter(str(pair["group1"]) for pair in active_learning_suggestions[:num_pairs])
+                #group_occurrences.update(str(pair["group2"]) for pair in active_learning_suggestions[:num_pairs])
+                #group_occurrences_sorted = dict(sorted(group_occurrences.items(), key=lambda item: item[1], reverse=True))
+                #print(group_occurrences_sorted)
 
-            #print('active_learning_suggestions', active_learning_suggestions[:10], ' ...')
-            sampled_nodes = [(suggestion['id1'], suggestion['id2']) for suggestion in active_learning_suggestions]
+                #print('active_learning_suggestions', active_learning_suggestions[:10], ' ...')
+                sampled_nodes = [(suggestion['id1'], suggestion['id2']) for suggestion in active_learning_suggestions]
         else:
             # pick two groups from the lowest two non leaf node levels of the tree at random until we sampled as many pairs as needed
             for _ in range(num_pairs):

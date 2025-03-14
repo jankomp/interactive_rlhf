@@ -16,24 +16,28 @@ from gymnasium.wrappers import RecordVideo
 
 def continue_training(name_prefix, range_end, additional_timesteps):
     for i in range(range_end):
-        name = name_prefix + str(i).zfill(2)
-        print(f"Training model {name}")
-
+        tr_condition_name = name_prefix + str(i)
+        print(f"Training model {tr_condition_name}")
         # BEGIN: PARAMETERS
-        logs_folder = 'case_study'
+        logs_folder = 'New_envs/'
         tb_log_dir = logs_folder + '/tb_logs'
-        tb_log_name = name
+        tb_log_name = tr_condition_name
         environment_number = 1 # integer from 0 to 7
-        gravity = -5
+        gravity = -9.81
         # END: PARAMETERS
 
         rng = np.random.default_rng(0)
 
-        environments = ['Walker2d-v4.1', 'Hopper-v4.1', 'Swimmer-v4.1', 'HalfCheetah-v4.1', 'Ant-v4.1', 'Reacher-v4.1', 'InvertedPendulum-v4.1', 'InvertedDoublePendulum-v4.1']
+        environments = ['GridWorld-v0.1', 'HalfCheetah-v4.1', 'Reacher-v4.1', 'Walker2d-v4.1', 'Hopper-v4.1', 'MountainCarContinuous-v0.1']
         chosen_environment = environments[environment_number]
         chosen_environment_short_name = chosen_environment.split('-v')[0]
+        tb_log_name = tb_log_name + '_' + chosen_environment_short_name
+        logs_folder = logs_folder + chosen_environment_short_name
         print(f"Chosen environment: {chosen_environment_short_name}")
         env_make_kwargs = {'terminate_when_unhealthy': False}
+        if environment_number == 0 or environment_number == 2 or environment_number == 5:
+            env_make_kwargs = {}
+
 
         # Set up the environment
         venv = make_vec_env(
@@ -46,13 +50,13 @@ def continue_training(name_prefix, range_end, additional_timesteps):
         )
 
         # Load the policy model
-        agent = PPO.load(logs_folder + '/' + name + '_policy_model_' + chosen_environment_short_name)
+        agent = PPO.load(logs_folder + '/' + tb_log_name + '_policy_model_' + chosen_environment_short_name)
         agent.tensorboard_log = tb_log_dir
 
         # Load the preference model
         reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
         reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
-        preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + "/" + name + "_preference_model_" + chosen_environment_short_name, reward_net)
+        preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + "/" + tb_log_name + "_preference_model_" + chosen_environment_short_name, reward_net)
 
         # Set up the trajectory generator
         trajectory_generator = preference_comparisons.AgentTrainer(
@@ -69,10 +73,10 @@ def continue_training(name_prefix, range_end, additional_timesteps):
         print(f"Training completed for an additional {additional_timesteps} timesteps")
 
         # Save the trained models
-        agent.save(logs_folder + '/' + name + '_policy_model_' + chosen_environment_short_name)
+        agent.save(logs_folder + '/' + tr_condition_name + '_policy_model_' + chosen_environment_short_name)
         print("Model saved as " + tb_log_name + f"_policy_model_{chosen_environment}")
 
-        preference_model.save_model(logs_folder + "/" + name + "_preference_model_" + chosen_environment_short_name)
+        preference_model.save_model(logs_folder + "/" + tr_condition_name + "_preference_model_" + chosen_environment_short_name)
         print("Model saved as " + tb_log_name + f"_preference_model_{chosen_environment}")
 
 
@@ -89,5 +93,4 @@ def continue_training(name_prefix, range_end, additional_timesteps):
                     obs, info = env.reset()
 
 
-continue_training('pairwise_', 10, 2_000_000)
-continue_training('groupwise_', 10, 2_000_000)
+continue_training('visualization_', 5, 9_900_000)

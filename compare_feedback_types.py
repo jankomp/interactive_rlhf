@@ -15,7 +15,7 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 
 
 rng = np.random.default_rng(0)
-def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_comparisons, rounds, std_dev, environment_number):
+def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_comparisons, rounds, std_dev, environment_number, vis_available=False):
     # make sure that max_episode_steps is divisible by fragment_length
     total_timesteps = 45_000
     max_episode_steps = 1000
@@ -24,13 +24,13 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     if environment_number == 0:
         gravity = None
     final_training_timesteps = 100_000
-    environments = ['GridWorld-v0.1', 'HalfCheetah-v4.1', 'Reacher-v4.1', 'Walker2d-v4.1', 'MountainCarContinuous-v0.1']
+    environments = ['GridWorld-v0.1', 'HalfCheetah-v4.1', 'Reacher-v4.1', 'Walker2d-v4.1', 'Hopper-v4.1', 'MountainCarContinuous-v0.1']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
     tb_log_name = tb_log_name + '_' + chosen_environment_short_name
     print(f"Chosen environment: {chosen_environment}")
     env_make_kwargs = {'terminate_when_unhealthy': False}
-    if environment_number == 0 or environment_number == 2 or environment_number == 3 or environment_number == 4:
+    if environment_number == 0 or environment_number == 2 or environment_number == 5:
         env_make_kwargs = {}
 
     logs_folder = logs_folder_top + '/' + chosen_environment_short_name
@@ -95,9 +95,9 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
         clustering_levels = 4
         if chosen_environment_short_name == 'HalfCheetah' or chosen_environment_short_name == 'Pusher':
             print('Clustering the levels differently because HalfCheetah is more complex')
-            gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels, constant_tree_level_size=False)
+            gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels, constant_tree_level_size=False, vis_available=vis_available)
         else:        
-            gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels)
+            gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels, vis_available=vis_available)
      
     # Several hyperparameters (reward_epochs, ppo_clip_range, ppo_ent_coef,
     # ppo_gae_lambda, ppo_n_epochs, discount_factor, use_sde, sde_sample_freq,
@@ -173,9 +173,7 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     print("Model saved as " + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
 
 
-for environment_no in [4, 1]:
+for environment_no in range(4, 6):
     for i in range(5):
-        print(f"Pairwise comparison {i}")
-        intantiate_and_train(True, 'New_envs', f"pairwise_{i}", 500, 9, 0.25, environment_no)
         print(f"Group comparison {i}")
-        intantiate_and_train(False, 'New_envs', f"groupwise_{i}", 500, 9, 0.25, environment_no)
+        intantiate_and_train(False, 'New_envs', f"visualization_{i}", 500, 9, 0.25, environment_no, True)

@@ -22,7 +22,7 @@ virtualenv -p ${python_version} ${venv}
 source ${venv}/bin/activate
 
 # Update pip to the latest version.
-pip install --upgrade pip
+pip install --upgrade pip setuptools setuptools-scm
 
 # If platform is linux, install pytorch CPU version.
 # This will prevent installing the CUDA version in the pip install ".[docs,parallel,test]" command.
