@@ -8,3 +8,4 @@ from . import reacher_v4_1
 from . import inverted_pendulum_v4_1
 from . import inverted_double_pendulum_v4_1
 from . import grid_world
+from . import continuous_mountain_car

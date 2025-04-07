@@ -56,7 +56,7 @@ def continue_training(name_prefix, range_end, additional_timesteps):
         # Load the preference model
         reward_net_members = [BasicRewardNet(venv.observation_space, venv.action_space, normalize_input_layer=RunningNorm) for _ in range(3)]
         reward_net = RewardEnsemble(venv.observation_space, venv.action_space, reward_net_members)
-        preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + "/" + tb_log_name + "_preference_model_" + chosen_environment_short_name, reward_net)
+        preference_model = preference_comparisons.PreferenceModel.load_model(logs_folder + "/" + tb_log_name + "_preference_model_" + chosen_environment_short_name + '.zip', reward_net)
 
         # Set up the trajectory generator
         trajectory_generator = preference_comparisons.AgentTrainer(

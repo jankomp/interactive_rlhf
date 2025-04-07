@@ -15,21 +15,19 @@ from src.imitation.util.custom_envs import hopper_v4_1, walker2d_v4_1, swimmer_v
 
 
 rng = np.random.default_rng(0)
-def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_comparisons, rounds, std_dev, environment_number, vis_available=False):
+def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_comparisons, rounds, comparison_timesteps, final_training_timesteps, std_dev, environment_number, vis_available=False):
     # make sure that max_episode_steps is divisible by fragment_length
-    total_timesteps = 45_000
     max_episode_steps = 1000
-    fragment_length = 25
+    fragment_length = 10
     gravity = -9.81
     if environment_number == 0:
         gravity = None
-    final_training_timesteps = 100_000
     environments = ['GridWorld-v0.1', 'HalfCheetah-v4.1', 'Reacher-v4.1', 'Walker2d-v4.1', 'Hopper-v4.1', 'MountainCarContinuous-v0.1']
     chosen_environment = environments[environment_number]
     chosen_environment_short_name = chosen_environment.split('-v')[0]
     tb_log_name = tb_log_name + '_' + chosen_environment_short_name
     print(f"Chosen environment: {chosen_environment}")
-    env_make_kwargs = {'terminate_when_unhealthy': False}
+    env_make_kwargs = {'terminate_when_unhealthy': False, 'ctrl_cost_weight': 0.0}
     if environment_number == 0 or environment_number == 2 or environment_number == 5:
         env_make_kwargs = {}
 
@@ -93,7 +91,7 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
             rng=rng,
         )
         clustering_levels = 4
-        if chosen_environment_short_name == 'HalfCheetah' or chosen_environment_short_name == 'Pusher':
+        if chosen_environment_short_name == 'HalfCheetah' or chosen_environment_short_name == 'Pusher' or chosen_environment_short_name == 'Ant' or chosen_environment_short_name == 'Walker2d':
             print('Clustering the levels differently because HalfCheetah is more complex')
             gatherer = preference_comparisons.SyntheticGathererForGroupComparisons(rng=rng, augment_to_group_size=1, use_active_learning=True, std_dev=std_dev, preference_model=preference_model, clustering_levels=clustering_levels, constant_tree_level_size=False, vis_available=vis_available)
         else:        
@@ -147,17 +145,17 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
         preference_gatherer=gatherer,
         reward_trainer=reward_trainer,
         fragment_length=fragment_length,
-        transition_oversampling=1,
-        initial_comparison_frac=0.25,
+        transition_oversampling=1.1,
+        initial_comparison_frac=0.1,
         allow_variable_horizon=False,
         initial_epoch_multiplier=4,
-        query_schedule="hyperbolic",
+        query_schedule="constant",
         custom_logger=custom_logger,
         feedback_logger=feedback_logger,
     )
 
     pref_comparisons.train(
-        total_timesteps=total_timesteps,
+        total_timesteps=comparison_timesteps,
         total_comparisons=total_comparisons,
         tb_log_name=tb_log_name,
     )
@@ -172,8 +170,22 @@ def intantiate_and_train(pairwise, logs_folder_top, tb_log_name, total_compariso
     preference_model.save_model(logs_folder + "/" + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
     print("Model saved as " + tb_log_name + f"_preference_model_{chosen_environment_short_name}")
 
-
-for environment_no in range(4, 6):
+# GridWorld and MountainCarContinuous
+for environment_no in [0, 5]:
     for i in range(5):
+        print(f"Vis comparison {i}")
+        intantiate_and_train(False, 'Vis_groups_pairs', f"visualization_{i}", 75, 1, 20_000, 1_000_000, 0.25, environment_no, True)
         print(f"Group comparison {i}")
-        intantiate_and_train(False, 'New_envs', f"visualization_{i}", 500, 9, 0.25, environment_no, True)
+        intantiate_and_train(False, 'Vis_groups_pairs', f"groupwise_{i}", 75, 1, 20_000, 1_000_000, 0.25, environment_no, False)
+        print(f"Pairwise comparison {i}")
+        intantiate_and_train(True, 'Vis_groups_pairs', f"pairwise_{i}", 75, 1, 20_000, 1_000_000, 0.25, environment_no, False)
+
+# HalfCheetah, Reacher,  Walker2d, Hopper
+for environment_no in [1, 2, 3, 4]:
+    for i in range(5):
+        print(f"Vis comparison {i}")
+        intantiate_and_train(False, 'Vis_groups_pairs', f"visualization_{i}", 1000, 9, 90_000, 10_000_000, 0.25, environment_no, True)
+        print(f"Group comparison {i}")
+        intantiate_and_train(False, 'Vis_groups_pairs', f"groupwise_{i}", 1000, 9, 90_000, 10_000_000, 0.25, environment_no, False)
+        print(f"Pairwise comparison {i}")
+        intantiate_and_train(True, 'Vis_groups_pairs', f"pairwise_{i}", 1000, 9, 90_000, 10_000_000, 0.25, environment_no, False)
