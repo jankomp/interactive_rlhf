@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Interactive RLHF</title>
+    <!-- Font Awesome CDN (fully functional without integrity issues) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 2em auto;
+            max-width: 800px;
+            background-color: #ffffff;
+            color: #24292f;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            border-bottom: 1px solid #d0d7de;
+            padding-bottom: 0.3em;
+            margin-bottom: 1em;
+        }
+
+        p {
+            font-size: 1rem;
+            margin-bottom: 1.5em;
+        }
+
+        .link-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1em;
+            align-items: center;
+            justify-content: center;
+            margin-top: auto;
+            padding-top: 2em;
+            border-top: 1px solid #d0d7de;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: #ffffff;
+            padding-bottom: 1em;
+        }
+
+
+        .link-item {
+            display: flex;
+            align-items: center;
+            padding: 0.5em 1em;
+            background-color: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            text-decoration: none;
+            color: #0969da;
+            font-weight: 500;
+            transition: background 0.2s ease;
+        }
+
+        .link-item:hover {
+            background-color: #eaeef2;
+        }
+
+        .link-item i {
+            margin-right: 0.5em;
+            font-size: 1.1em;
+        }
+    </style>
+</head>
+
+<body>
+    <div style="min-height: 90vh;">
+        <h1>Interactive RLHF</h1>
+        <p>
+            Reinforcement learning from human feedback (RLHF) has emerged as a key enabling technology for aligning AI behavior with human preferences. The traditional way to collect data in RLHF is via pairwise comparisons: human raters are asked to indicate which one of two samples is preferable. We present an interactive visualization that better exploits the human visual ability to compare and explore whole groups of samples. The interface is comprised of two linked views: 1) an exploration view showing a contextual overview of all sampled behaviors organized in a hierarchical clustering structure, and 2) a comparison view displaying two selected groups of behaviors for user queries. Users can efficiently explore large sets of behaviors by iterating between these two views. Additionally, we devised an active learning approach suggesting groups for comparison. As shown by our evaluation in six different simulated robotics tasks, our approach increases the number of elicited preferences within the same amount of human time by 86.7%. Our method leads to lower error rates and better policies. We open-source the code that can be easily integrated into the RLHF training loop, supporting the future of human alignment for AI models.
+        </p>
+        <div style="text-align: center; margin-top: 2em;">
+            <img src="teaser-rlhf.png" alt="Teaser figure" style="max-width: 100%; height: auto;" />
+        </div>
+        
+    </div>
+    <div class="link-bar">
+        <a class="link-item" href="https://arxiv.org/abs/placeholder" target="_blank">
+            <i class="fas fa-file-alt"></i> Paper
+        </a>
+        <a class="link-item" href="https://example.com/supplementary-materials" target="_blank">
+            <i class="fas fa-file-alt"></i> Appendix
+        </a>
+        <a class="link-item" href="https://github.com/jankomp/interactive_rlhf.git" target="_blank">
+            <i class="fab fa-github"></i> Backend
+        </a>
+        <a class="link-item" href="https://github.com/jankomp/interactive_rlhf_gui.git" target="_blank">
+            <i class="fab fa-github"></i> Frontend
+        </a>
+        <a class="link-item" href="https://www.youtube.com/watch?v=RqqSKIWxUPE" target="_blank">
+            <i class="fab fa-youtube"></i> Demo
+        </a>
+    </div>
+</body>
+
+</html>

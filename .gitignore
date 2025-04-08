@@ -1,6 +1,5 @@
 # Project-specific
 .#*
-*.html
 output/
 /data/
 auto.pkl
